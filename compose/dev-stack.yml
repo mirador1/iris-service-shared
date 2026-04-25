@@ -89,6 +89,27 @@ services:
       timeout: 5s
       retries: 12
 
+  ollama:
+    # Local LLM serving — used by Bio service (mirror Java's BioService).
+    # ~4 GB image including llama3.2 model. Opt-in via profile=llm so
+    # `docker compose up -d` (default) doesn't pull it.
+    profiles: ["llm"]
+    image: ollama/ollama:0.9.0
+    container_name: mirador-ollama
+    ports:
+      - "11434:11434"
+    volumes:
+      - mirador-ollama-data:/root/.ollama
+    # Serve in background, pull model on first boot, then keep serving.
+    entrypoint: ["/bin/sh", "-c", "ollama serve & sleep 5 && ollama pull llama3.2 && wait"]
+    healthcheck:
+      test: ["CMD", "ollama", "list"]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+
 volumes:
   mirador-py-pgdata:
     name: mirador-py-pgdata
+  mirador-ollama-data:
+    name: mirador-ollama-data
