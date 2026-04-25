@@ -22,11 +22,11 @@ Three options considered :
 - **(a)** Status quo + ADR documenting the duplication as intentional
 - **(b)** GitLab CI templates project (lightweight, CI-only sharing)
 - **(c)** Full `mirador-infra` repo (k8s + CI + scripts + everything)
-- **(d)** Submodule of a focused `mirador-shared` repo (dev-stack + budget + CI templates)
+- **(d)** Submodule of a focused `mirador-service-shared` repo (dev-stack + budget + CI templates)
 
 ## Decision
 
-**Option (d) — `mirador-shared` repo + submodule into svc + python.**
+**Option (d) — `mirador-service-shared` repo + submodule into svc + python.**
 
 Rationale (per user 2026-04-25) :
 > "Dès que Java et Python pourraient partager plus que la fais intégration,
@@ -46,7 +46,7 @@ Rationale (per user 2026-04-25) :
 ## Repo structure
 
 ```
-mirador-shared/
+mirador-service-shared/
 ├── compose/dev-stack.yml         # postgres + redis + kafka + LGTM
 ├── bin/
 │   ├── budget/                   # GCP + OVH alert + cost audit
@@ -115,21 +115,21 @@ shell scripts. Solves the smallest part of the problem.
 Python. Forcing them into one repo creates parametric complexity worse than
 the duplication it removes.
 
-### (d) Submodule of focused `mirador-shared` ← chosen
+### (d) Submodule of focused `mirador-service-shared` ← chosen
 **Pro** : SHA-pin safety, visual non-intrusion, scales incrementally
 (start with dev-stack + budget, grow as needed).
 **Con** : submodule UX friction (acceptable + documented).
 
 ## Migration plan
 
-1. Create `mirador1/mirador-shared` GitLab project (DONE).
-2. Copy shared content from svc + python into `mirador-shared/` (DONE).
+1. Create `mirador1/mirador-service-shared` GitLab project (DONE).
+2. Copy shared content from svc + python into `mirador-service-shared/` (DONE).
 3. Add submodule `infra/shared/` in svc + python.
 4. Update `bin/run.sh` + `bin/demo-up.sh` in each consumer to reference
    `infra/shared/compose/dev-stack.yml` instead of local `docker-compose.yml`.
 5. (Optional, later) Move `bin/budget/` etc. fully out of svc, leaving a
    thin wrapper that delegates to `infra/shared/bin/budget/*`.
-6. Tag `mirador-shared` stable-v0.1.0 once everything builds end-to-end.
+6. Tag `mirador-service-shared` stable-v0.1.0 once everything builds end-to-end.
 
 ## See also
 

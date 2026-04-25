@@ -1,4 +1,4 @@
-# mirador-shared
+# mirador-service-shared
 
 Shared infrastructure + tooling for the Mirador project family. **Submoduled
 into `mirador-service` (Java) + `mirador-service-python`** under
@@ -28,8 +28,8 @@ repos' visual structure clean (one folder = one boundary).
 ## How to update
 
 ```bash
-# In mirador-shared :
-$ cd /Users/benoitbesson/dev/workspace-modern/mirador-shared
+# In mirador-service-shared :
+$ cd /Users/benoitbesson/dev/workspace-modern/mirador-service-shared
 $ git switch dev
 # … edit, commit, push …
 $ git push origin dev

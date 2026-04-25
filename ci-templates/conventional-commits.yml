@@ -4,7 +4,7 @@
 #
 # Usage in consumer .gitlab-ci.yml :
 #   include:
-#     - project: 'mirador1/mirador-shared'
+#     - project: 'mirador1/mirador-service-shared'
 #       ref: main
 #       file: 'ci-templates/conventional-commits.yml'
 
