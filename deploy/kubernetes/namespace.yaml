@@ -1,0 +1,64 @@
+# =============================================================================
+# Kubernetes Namespace definitions
+#
+# Three namespaces follow the principle of least privilege and resource isolation:
+#   app           — the mirador application (backend + frontend)
+#   infra         — stateful infrastructure: PostgreSQL, Kafka, Redis, Keycloak
+#   observability — monitoring stack: Grafana, Prometheus, Loki, Tempo
+#
+# Separating app and infra allows:
+#   - Independent RBAC policies per namespace
+#   - Network policies to allow only app → infra traffic (see networkpolicies.yaml)
+#   - Separate resource quotas (infra pods tend to need more memory)
+#
+# ── Pod Security Standards (PSS) admission labels ────────────────────────────
+# `pod-security.kubernetes.io/*` labels activate the built-in PodSecurity
+# admission controller (GA since K8s 1.25). Three profiles, warn-then-enforce
+# ladder:
+#   • enforce=restricted → reject pods that don't comply
+#   • audit=restricted   → log violations (for historical review)
+#   • warn=restricted    → show a warning at kubectl apply time
+#
+# `restricted` is the strictest profile — blocks privileged containers,
+# root users, hostNetwork, writable root FS without explicit allow, etc.
+# Our Deployments + sidecars already meet it (securityContext block).
+#
+# The `infra` namespace uses `baseline` instead because Kafka/Keycloak
+# charts occasionally need capabilities (CAP_NET_BIND_SERVICE) the
+# restricted profile rejects. Baseline is still a strong default.
+# =============================================================================
+
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: app
+  labels:
+    app.kubernetes.io/part-of: mirador
+    # Pod Security Standards — enforce the strictest profile.
+    pod-security.kubernetes.io/enforce: restricted
+    pod-security.kubernetes.io/enforce-version: latest
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/warn: restricted
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: infra
+  labels:
+    app.kubernetes.io/part-of: mirador
+    # Baseline rather than restricted — some stateful services (Kafka,
+    # Keycloak init containers) trip on restricted's no-root rule.
+    pod-security.kubernetes.io/enforce: baseline
+    pod-security.kubernetes.io/enforce-version: latest
+    pod-security.kubernetes.io/audit: restricted
+    pod-security.kubernetes.io/warn: restricted
+---
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: observability
+  labels:
+    app.kubernetes.io/part-of: mirador
+    pod-security.kubernetes.io/enforce: baseline
+    pod-security.kubernetes.io/audit: baseline
+    pod-security.kubernetes.io/warn: baseline

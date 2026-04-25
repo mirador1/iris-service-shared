@@ -1,0 +1,61 @@
+# =============================================================================
+# Grafana datasources — Prometheus exemplars → Tempo trace links.
+#
+# The grafana/otel-lgtm image ships Grafana with Prometheus (Mimir), Loki,
+# Tempo and Pyroscope all auto-provisioned. The bundled Prometheus datasource
+# doesn't enable exemplar-based trace linking by default — we override the
+# YAML at /otel-lgtm/grafana/conf/provisioning/datasources/datasources.yaml
+# to add it.
+#
+# Contract:
+#   - application.yml sets percentiles-histogram on http.server.requests so
+#     Micrometer emits histograms with exemplars pointing at the current
+#     trace ID.
+#   - otel-lgtm's Prometheus scrape is OpenMetrics-capable (accepts
+#     `application/openmetrics-text`) — exemplars survive the scrape
+#     without extra config.
+#   - Grafana, when clicking an exemplar in a histogram panel, needs to
+#     know WHICH datasource holds the trace (Tempo) and WHAT query-template
+#     to use ("${__value.raw}" = the trace ID carried by the exemplar).
+#
+# Effect:
+#   Clicking an exemplar dot on e.g. the Golden Signals p99 latency panel
+#   jumps to the corresponding Tempo trace. Closes the metrics→traces loop
+#   that reads the RED signals and then pivots to "which specific request
+#   made that spike happen?".
+# =============================================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-datasources-override
+  namespace: infra
+  labels:
+    app.kubernetes.io/name: lgtm
+    app.kubernetes.io/component: grafana-datasources
+data:
+  # otel-lgtm uses one datasources file per folder; overriding with the
+  # same filename replaces the image's default Prometheus entry.
+  # Tempo + Loki remain untouched (not listed here = keep defaults).
+  datasources.yaml: |
+    apiVersion: 1
+    datasources:
+      - name: Prometheus
+        uid: prometheus
+        type: prometheus
+        access: proxy
+        url: http://localhost:9090
+        isDefault: true
+        editable: false
+        jsonData:
+          httpMethod: POST
+          # Exemplars configuration — the key bit for O1.
+          # Grafana reads exemplar data points from Prometheus histograms
+          # and, on click, uses the link template below to open the trace.
+          exemplarTraceIdDestinations:
+            - name: trace_id
+              datasourceUid: tempo
+              urlDisplayLabel: "View trace"
+          disableRecordingRules: false
+          prometheusType: Mimir
+          prometheusVersion: 2.45.0
+          timeout: 60

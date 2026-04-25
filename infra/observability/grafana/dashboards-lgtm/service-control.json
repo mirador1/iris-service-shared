@@ -1,0 +1,498 @@
+{
+  "title": "🎮 Service Control & Actions",
+  "description": "Interactive dashboard — Docker container start/stop, traffic generation. Calls the Docker Engine API (localhost:2375 CORS proxy) and Spring Boot API (localhost:8080) directly from the browser.",
+  "uid": "service-control",
+  "tags": [
+    "mirador",
+    "interactive",
+    "docker"
+  ],
+  "schemaVersion": 36,
+  "version": 1,
+  "refresh": "5s",
+  "time": {
+    "from": "now-15m",
+    "to": "now"
+  },
+  "timepicker": {},
+  "timezone": "browser",
+  "panels": [
+    {
+      "type": "row",
+      "title": "🐳 Docker Service Control",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 0
+      },
+      "panels": []
+    },
+    {
+      "title": "Container Start / Stop",
+      "description": "Live container state from Docker Engine API (polling every 5 s). Start/Stop buttons call POST /containers/{name}/{start|stop}. 'Stop Non-Essential' stops everything except DB, Redis, Kafka, LGTM in one click.",
+      "type": "marcusolsson-dynamictext-panel",
+      "datasource": null,
+      "gridPos": {
+        "h": 11,
+        "w": 24,
+        "x": 0,
+        "y": 1
+      },
+      "options": {
+        "content": "\n<style>\n#dc-wrap{font-size:13px}\n.dc-topbar{display:flex;gap:10px;align-items:center;flex-wrap:wrap;margin-bottom:12px;padding-bottom:10px;border-bottom:1px solid rgba(255,255,255,.1)}\n.dc-action-btn{padding:5px 16px;border:none;border-radius:4px;cursor:pointer;font-weight:600;font-size:12px}\n.dc-btn-create{background:#3b82f6;color:#fff}.dc-btn-create:hover{background:#2563eb}\n.dc-btn-stopall{background:#ef4444;color:#fff}.dc-btn-stopall:hover{background:#dc2626}\n.dc-msg{font-size:.8em;color:#94a3b8}\n.dc-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(160px,1fr));gap:8px}\n.dc-card{background:rgba(255,255,255,.04);border:1px solid rgba(255,255,255,.1);border-radius:6px;padding:8px 10px}\n.dc-card.is-up{border-color:rgba(34,197,94,.4)}.dc-card.is-down{border-color:rgba(239,68,68,.4)}\n.dc-head{display:flex;align-items:center;gap:5px;margin-bottom:6px}\n.dc-icon{font-size:1.1em}.dc-name{font-size:.8em;font-weight:600;flex:1;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}\n.dc-badge{font-size:.65em;font-weight:700;padding:1px 5px;border-radius:3px;white-space:nowrap}\n.dc-badge.up{background:#16a34a;color:#fff}.dc-badge.down{background:#dc2626;color:#fff}.dc-badge.unk{background:#4b5563;color:#fff}\n.dc-btns{display:flex;gap:4px}\n.dc-btn{flex:1;font-size:.7em;padding:3px 0;border:none;border-radius:3px;cursor:pointer;font-weight:700}\n.dc-btn-stop{background:#ef444466;color:#fff}.dc-btn-stop:hover{background:#ef4444}\n.dc-btn-start{background:#22c55e66;color:#fff}.dc-btn-start:hover{background:#22c55e}\n.dc-btn:disabled{opacity:.3;cursor:default}\n.dc-err{color:#f59e0b;font-size:.85em;padding:8px}\n</style>\n<div id=\"dc-wrap\">\n  <div class=\"dc-topbar\">\n    <button class=\"dc-action-btn dc-btn-create\" id=\"dc-create\">➕ Create Test Customer</button>\n    <button class=\"dc-action-btn dc-btn-stopall\" id=\"dc-stopall\">⏹ Stop Non-Essential</button>\n    <span class=\"dc-msg\" id=\"dc-msg\"></span>\n  </div>\n  <div class=\"dc-grid\" id=\"dc-grid\"><span class=\"dc-err\">Connecting to Docker API…</span></div>\n</div>\n",
+        "defaultContent": "Loading…",
+        "afterRender": "\n(function(){\n  const API='http://localhost:2375';\n  const SPRING='http://localhost:8080';\n  // Containers ordered by importance; starred ones are \"essential\" (excluded from Stop All)\n  const SVCS=[\n    {name:'postgres-demo',        icon:'🐘',label:'PostgreSQL', essential:true},\n    {name:'redis-demo',           icon:'🗄️',label:'Redis',       essential:true},\n    {name:'kafka-demo',           icon:'📨',label:'Kafka',       essential:true},\n    {name:'ollama',               icon:'🧠',label:'Ollama',      essential:false},\n    {name:'keycloak',             icon:'🔐',label:'Keycloak',    essential:false},\n    {name:'customerservice-lgtm', icon:'🔍',label:'LGTM',        essential:true},\n    {name:'kafka-ui',             icon:'📋',label:'Kafka UI',    essential:false},\n    {name:'redisinsight',         icon:'🔎',label:'RedisInsight',essential:false},\n    {name:'redis-commander',      icon:'📟',label:'Redis Cmdr',  essential:false},\n    {name:'pgadmin',              icon:'🛢️',label:'pgAdmin',     essential:false},\n    {name:'pgweb',                icon:'🔬',label:'pgweb',       essential:false},\n    {name:'sonarqube',            icon:'🔍',label:'SonarQube',   essential:false},\n  ];\n\n  const grid=document.getElementById('dc-grid');\n  const msg=document.getElementById('dc-msg');\n\n  function showMsg(text,color){\n    msg.textContent=text; msg.style.color=color||'#94a3b8';\n    if(color) setTimeout(()=>{msg.textContent='';msg.style.color='#94a3b8';},3000);\n  }\n\n  function render(states){\n    grid.innerHTML=SVCS.map(s=>{\n      const state=states[s.name];\n      const up=state==='running', unk=!state;\n      return `<div class=\"dc-card ${up?'is-up':unk?'':'is-down'}\">\n        <div class=\"dc-head\">\n          <span class=\"dc-icon\">${s.icon}</span>\n          <span class=\"dc-name\" title=\"${s.name}\">${s.label}</span>\n          <span class=\"dc-badge ${up?'up':unk?'unk':'down'}\">${up?'UP':unk?'—':'DOWN'}</span>\n        </div>\n        <div class=\"dc-btns\">\n          <button class=\"dc-btn dc-btn-stop\" onclick=\"window._dc('${s.name}','stop')\" ${!up?'disabled':''}>↓ Stop</button>\n          <button class=\"dc-btn dc-btn-start\" onclick=\"window._dc('${s.name}','start')\" ${up?'disabled':''}>↑ Start</button>\n        </div>\n      </div>`;\n    }).join('');\n  }\n\n  async function refresh(){\n    try{\n      const r=await fetch(`${API}/containers/json?all=true`);\n      const list=await r.json();\n      const states={};\n      list.forEach(c=>{states[(c.Names[0]||'').replace('/','')]=c.State;});\n      render(states);\n    }catch(e){\n      grid.innerHTML='<span class=\"dc-err\">⚠ Docker API unreachable (localhost:2375)</span>';\n    }\n  }\n\n  window._dc=async function(name,action){\n    try{ await fetch(`${API}/containers/${name}/${action}`,{method:'POST'}); }catch(e){}\n    showMsg(`${action==='stop'?'⏹':'▶'} ${name}…`);\n    setTimeout(refresh,1500);\n  };\n\n  // Create a test customer\n  document.getElementById('dc-create').onclick=async function(){\n    this.disabled=true;\n    const ts=Date.now();\n    try{\n      const r=await fetch(`${SPRING}/customers`,{\n        method:'POST',\n        headers:{'Content-Type':'application/json'},\n        body:JSON.stringify({name:'Grafana User '+ts,email:'grafana'+ts+'@test.com'})\n      });\n      showMsg(r.ok?'✅ Customer created':'⚠ HTTP '+r.status, r.ok?'#22c55e':'#f59e0b');\n    }catch(e){ showMsg('❌ API unreachable','#ef4444'); }\n    setTimeout(()=>{document.getElementById('dc-create').disabled=false;},3000);\n  };\n\n  // Stop all non-essential containers\n  document.getElementById('dc-stopall').onclick=async function(){\n    this.disabled=true;\n    const toStop=SVCS.filter(s=>!s.essential);\n    showMsg('Stopping '+toStop.length+' containers…');\n    await Promise.all(toStop.map(s=>fetch(`${API}/containers/${s.name}/stop`,{method:'POST'}).catch(()=>{})));\n    setTimeout(()=>{refresh();this.disabled=false;},2000);\n  };\n\n  refresh();\n  if(!window._dcTimer){ window._dcTimer=setInterval(refresh,5000); }\n})();\n",
+        "helpers": "",
+        "renderMd": false
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      }
+    },
+    {
+      "type": "row",
+      "title": "🚀 Traffic Generator",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 12
+      },
+      "panels": []
+    },
+    {
+      "title": "HTTP Traffic Generator",
+      "description": "Sends POST /customers requests to generate HTTP traffic visible in the throughput and latency charts. Configurable count and delay. Useful for triggering Resilience4j circuit breakers or testing rate limits.",
+      "type": "marcusolsson-dynamictext-panel",
+      "datasource": null,
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 0,
+        "y": 13
+      },
+      "options": {
+        "content": "\n<style>\n#tg-wrap{font-size:13px}\n.tg-row{display:flex;gap:8px;align-items:center;flex-wrap:wrap;margin-bottom:8px}\nlabel{font-size:.8em;color:#94a3b8;min-width:60px}\n.tg-input{\n  background:rgba(255,255,255,.07);border:1px solid rgba(255,255,255,.15);\n  border-radius:4px;padding:4px 8px;color:#e2e8f0;font-size:.8em;width:70px;\n}\n.tg-btn{\n  padding:5px 16px;border:none;border-radius:4px;cursor:pointer;\n  font-weight:600;font-size:12px;background:#3b82f6;color:#fff;\n}\n.tg-btn:hover{background:#2563eb}\n.tg-btn.stop{background:#6b7280}.tg-btn.stop:hover{background:#4b5563}\n.tg-log{\n  font-size:.75em;color:#64748b;font-family:monospace;\n  max-height:120px;overflow-y:auto;border-top:1px solid rgba(255,255,255,.07);\n  padding-top:6px;margin-top:4px;\n}\n.tg-ok{color:#22c55e}.tg-err{color:#ef4444}\n</style>\n<div id=\"tg-wrap\">\n  <div class=\"tg-row\">\n    <label>Requests</label>\n    <input class=\"tg-input\" id=\"tg-count\" type=\"number\" value=\"10\" min=\"1\" max=\"200\">\n    <label>Delay (ms)</label>\n    <input class=\"tg-input\" id=\"tg-delay\" type=\"number\" value=\"200\" min=\"0\" max=\"5000\">\n    <button class=\"tg-btn\" id=\"tg-start\">🚀 Send Traffic</button>\n    <button class=\"tg-btn stop\" id=\"tg-stop\" disabled>⏹ Stop</button>\n  </div>\n  <div class=\"tg-log\" id=\"tg-log\">Ready.</div>\n</div>\n",
+        "defaultContent": "Loading…",
+        "afterRender": "\n(function(){\n  const SPRING='http://localhost:8080';\n  let running=false, sent=0, errors=0;\n\n  const logEl=document.getElementById('tg-log');\n  const startBtn=document.getElementById('tg-start');\n  const stopBtn=document.getElementById('tg-stop');\n\n  function log(msg,cls){\n    const line=document.createElement('div');\n    line.className=cls||'';\n    line.textContent=msg;\n    logEl.appendChild(line);\n    logEl.scrollTop=logEl.scrollHeight;\n    // Keep last 50 lines\n    while(logEl.children.length>50) logEl.removeChild(logEl.firstChild);\n  }\n\n  startBtn.onclick=async function(){\n    const count=parseInt(document.getElementById('tg-count').value)||10;\n    const delay=parseInt(document.getElementById('tg-delay').value)||200;\n    running=true; sent=0; errors=0;\n    startBtn.disabled=true; stopBtn.disabled=false;\n    log(`▶ Sending ${count} requests (${delay}ms delay)…`);\n\n    for(let i=0;i<count && running;i++){\n      const ts=Date.now();\n      try{\n        const r=await fetch(`${SPRING}/customers`,{\n          method:'POST',\n          headers:{'Content-Type':'application/json'},\n          body:JSON.stringify({name:'Load User '+ts,email:'load'+ts+'@test.com'})\n        });\n        if(r.ok){ sent++; log(`✓ ${i+1}/${count} — 201 Created`,'tg-ok'); }\n        else { errors++; log(`✗ ${i+1}/${count} — HTTP ${r.status}`,'tg-err'); }\n      }catch(e){ errors++; log(`✗ ${i+1}/${count} — Error: ${e.message}`,'tg-err'); }\n      if(delay>0 && i<count-1) await new Promise(r=>setTimeout(r,delay));\n    }\n    log(`Done. Sent: ${sent}, Errors: ${errors}`);\n    running=false; startBtn.disabled=false; stopBtn.disabled=true;\n  };\n\n  stopBtn.onclick=function(){\n    running=false;\n    log('⏹ Stopped by user.');\n    startBtn.disabled=false; stopBtn.disabled=true;\n  };\n})();\n",
+        "helpers": "",
+        "renderMd": false
+      },
+      "fieldConfig": {
+        "defaults": {},
+        "overrides": []
+      }
+    },
+    {
+      "title": "Live Throughput (during traffic)",
+      "description": "Watch the RPS rise as traffic is generated. Stacked bars: green=2xx, orange=4xx, red=5xx.",
+      "type": "timeseries",
+      "datasource": {
+        "type": "prometheus",
+        "uid": "prometheus"
+      },
+      "gridPos": {
+        "h": 8,
+        "w": 12,
+        "x": 12,
+        "y": 13
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum(rate(http_server_requests_milliseconds_count{http_response_status_code=~\"2..\"}[30s]))",
+          "legendFormat": "2xx",
+          "refId": "A"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum(rate(http_server_requests_milliseconds_count{http_response_status_code=~\"4..\"}[30s]))",
+          "legendFormat": "4xx",
+          "refId": "B"
+        },
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum(rate(http_server_requests_milliseconds_count{http_response_status_code=~\"5..\"}[30s]))",
+          "legendFormat": "5xx",
+          "refId": "C"
+        }
+      ],
+      "options": {
+        "tooltip": {
+          "mode": "multi",
+          "sort": "desc"
+        },
+        "legend": {
+          "displayMode": "list",
+          "placement": "bottom"
+        }
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "reqps",
+          "custom": {
+            "drawStyle": "bars",
+            "barAlignment": 0,
+            "fillOpacity": 70,
+            "lineWidth": 0,
+            "stacking": {
+              "mode": "normal",
+              "group": "A"
+            }
+          }
+        },
+        "overrides": [
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "2xx"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "#16a34a",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "4xx"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "#f59e0b",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          },
+          {
+            "matcher": {
+              "id": "byName",
+              "options": "5xx"
+            },
+            "properties": [
+              {
+                "id": "color",
+                "value": {
+                  "fixedColor": "#ef4444",
+                  "mode": "fixed"
+                }
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "type": "row",
+      "title": "🩺 Health Probes (real-time)",
+      "collapsed": false,
+      "gridPos": {
+        "h": 1,
+        "w": 24,
+        "x": 0,
+        "y": 21
+      },
+      "panels": []
+    },
+    {
+      "title": "🟢 Health",
+      "description": "GET /actuator/health — composite status",
+      "type": "stat",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "infinity"
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 8,
+        "x": 0,
+        "y": 22
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "infinity"
+          },
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "dataframe",
+          "url": "http://host.docker.internal:8080/actuator/health",
+          "url_options": {
+            "method": "GET",
+            "data": ""
+          },
+          "root_selector": "",
+          "columns": [
+            {
+              "selector": "status",
+              "text": "status",
+              "type": "string"
+            }
+          ],
+          "filters": [],
+          "global_query_id": ""
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "orientation": "auto",
+        "textMode": "value",
+        "colorMode": "background",
+        "graphMode": "none"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "string",
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "UP": {
+                  "text": "UP",
+                  "color": "green",
+                  "index": 0
+                }
+              }
+            },
+            {
+              "type": "special",
+              "options": {
+                "match": "null",
+                "result": {
+                  "text": "DOWN",
+                  "color": "red",
+                  "index": 1
+                }
+              }
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          }
+        }
+      }
+    },
+    {
+      "title": "🚦 Readiness",
+      "description": "GET /actuator/health/readiness — ApplicationAvailability.readinessState",
+      "type": "stat",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "infinity"
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 8,
+        "x": 8,
+        "y": 22
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "infinity"
+          },
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "dataframe",
+          "url": "http://host.docker.internal:8080/actuator/health/readiness",
+          "url_options": {
+            "method": "GET",
+            "data": ""
+          },
+          "root_selector": "",
+          "columns": [
+            {
+              "selector": "status",
+              "text": "status",
+              "type": "string"
+            }
+          ],
+          "filters": [],
+          "global_query_id": ""
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "orientation": "auto",
+        "textMode": "value",
+        "colorMode": "background",
+        "graphMode": "none"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "string",
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "UP": {
+                  "text": "UP",
+                  "color": "green",
+                  "index": 0
+                }
+              }
+            },
+            {
+              "type": "special",
+              "options": {
+                "match": "null",
+                "result": {
+                  "text": "DOWN",
+                  "color": "red",
+                  "index": 1
+                }
+              }
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          }
+        }
+      }
+    },
+    {
+      "title": "🫀 Liveness",
+      "description": "GET /actuator/health/liveness — ApplicationAvailability.livenessState",
+      "type": "stat",
+      "datasource": {
+        "type": "yesoreyeram-infinity-datasource",
+        "uid": "infinity"
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 8,
+        "x": 16,
+        "y": 22
+      },
+      "targets": [
+        {
+          "datasource": {
+            "type": "yesoreyeram-infinity-datasource",
+            "uid": "infinity"
+          },
+          "refId": "A",
+          "type": "json",
+          "source": "url",
+          "format": "dataframe",
+          "url": "http://host.docker.internal:8080/actuator/health/liveness",
+          "url_options": {
+            "method": "GET",
+            "data": ""
+          },
+          "root_selector": "",
+          "columns": [
+            {
+              "selector": "status",
+              "text": "status",
+              "type": "string"
+            }
+          ],
+          "filters": [],
+          "global_query_id": ""
+        }
+      ],
+      "options": {
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ]
+        },
+        "orientation": "auto",
+        "textMode": "value",
+        "colorMode": "background",
+        "graphMode": "none"
+      },
+      "fieldConfig": {
+        "defaults": {
+          "unit": "string",
+          "mappings": [
+            {
+              "type": "value",
+              "options": {
+                "UP": {
+                  "text": "UP",
+                  "color": "green",
+                  "index": 0
+                }
+              }
+            },
+            {
+              "type": "special",
+              "options": {
+                "match": "null",
+                "result": {
+                  "text": "DOWN",
+                  "color": "red",
+                  "index": 1
+                }
+              }
+            }
+          ],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "red",
+                "value": null
+              }
+            ]
+          },
+          "color": {
+            "mode": "thresholds"
+          }
+        }
+      }
+    }
+  ]
+}

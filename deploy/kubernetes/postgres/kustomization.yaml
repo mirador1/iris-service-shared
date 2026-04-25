@@ -1,0 +1,15 @@
+# =============================================================================
+# Optional in-cluster Postgres mini-base.
+#
+# Lives OUTSIDE the main base because GKE replaces it with Cloud SQL.
+# Overlays that want an in-cluster DB (local, eks, aks) reference:
+#   resources: [ ../../base, ../../base/postgres ]
+#
+# Kept in its own sub-base because Kustomize forbids referencing a raw YAML
+# file from a different directory tree — it must be wrapped in a kustomization.
+# =============================================================================
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - postgres.yaml

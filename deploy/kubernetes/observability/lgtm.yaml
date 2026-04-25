@@ -1,0 +1,161 @@
+# =============================================================================
+# LGTM stack — Grafana + Loki + Tempo + Mimir all in one pod.
+#
+# Uses the official `grafana/otel-lgtm` image that bundles all four products
+# plus an OTel Collector preconfigured to route:
+#   - traces → Tempo (service 3200 → container 3200)
+#   - logs   → Loki  (service 3100 → container 3100)
+#   - metrics → Mimir (service 9009 → container 9090 — the image's internal
+#              Mimir listens on the default Prometheus port 9090. The service
+#              keeps port 9009 because many existing refs use it (canary
+#              analysis-template, networkpolicies). targetPort: 9090 aligns
+#              with reality.)
+#   - OTLP ingest on 4317 (gRPC) and 4318 (HTTP)
+#
+# Grafana is wired to all three datasources on boot — open http://.../ and
+# they are already populated with "OTLP" as the default flow.
+#
+# Resource requests tuned for a single-pod demo (ADR-0014). Data is kept in
+# an emptyDir; lost on restart — acceptable for ephemeral cluster (ADR-0022).
+# =============================================================================
+apiVersion: v1
+kind: Service
+metadata:
+  name: lgtm
+  namespace: infra
+  labels:
+    app.kubernetes.io/name: lgtm
+spec:
+  selector:
+    app.kubernetes.io/name: lgtm
+  ports:
+    - name: grafana
+      port: 3000
+      targetPort: 3000
+    - name: otlp-grpc
+      port: 4317
+      targetPort: 4317
+    - name: otlp-http
+      port: 4318
+      targetPort: 4318
+    - name: loki
+      port: 3100
+      targetPort: 3100
+    - name: tempo
+      port: 3200
+      targetPort: 3200
+    - name: mimir
+      port: 9009
+      # The grafana/otel-lgtm image runs Mimir on 9090 internally (default
+      # Prometheus port). Without this targetPort override, the service
+      # routed to 9009 on the pod which isn't bound → ECONNREFUSED.
+      targetPort: 9090
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: lgtm
+  namespace: infra
+  labels:
+    app.kubernetes.io/name: lgtm
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app.kubernetes.io/name: lgtm
+  template:
+    metadata:
+      labels:
+        app.kubernetes.io/name: lgtm
+    spec:
+      # ServiceAccount granting kubeletstats + k8s_cluster RBAC
+      # (defined in lgtm-k8s-receivers.yaml). See ADR-0038.
+      serviceAccountName: lgtm-collector
+      containers:
+        - name: lgtm
+          image: grafana/otel-lgtm:0.25.0
+          ports:
+            - name: grafana
+              containerPort: 3000
+            - name: otlp-grpc
+              containerPort: 4317
+            - name: otlp-http
+              containerPort: 4318
+          env:
+            - name: GF_AUTH_ANONYMOUS_ENABLED
+              value: "true"
+            - name: GF_AUTH_ANONYMOUS_ORG_ROLE
+              value: "Admin"
+            - name: GF_AUTH_DISABLE_LOGIN_FORM
+              value: "true"
+            # Default dashboard landing page.
+            - name: GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH
+              value: /otel-lgtm/grafana/conf/provisioning/dashboards/home.json
+            # Node name for kubeletstats receiver endpoint templating
+            # (`${env:K8S_NODE_NAME}:10250`). Downward API — doesn't
+            # change per-pod, just makes the current node's kubelet
+            # reachable from this Pod.
+            - name: K8S_NODE_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: spec.nodeName
+          resources:
+            requests:
+              cpu: 250m
+              memory: 1Gi
+            limits:
+              cpu: 1
+              memory: 2Gi
+          readinessProbe:
+            httpGet:
+              path: /api/health
+              port: 3000
+            initialDelaySeconds: 15
+            periodSeconds: 10
+          volumeMounts:
+            - name: data
+              mountPath: /data
+            # Grafana dashboards as code. Two-mount pattern because:
+            #   • The provider YAML must sit directly in
+            #     <provisioning>/dashboards/ (Grafana only scans that dir
+            #     for *.yaml provider files, not subdirs).
+            #   • The dashboard JSONs must sit in the path the provider YAML
+            #     points at (options.path), NOT alongside it — Grafana
+            #     otherwise tries to load the provider YAML as a dashboard.
+            # subPath mounts let us inject each file individually into the
+            # otel-lgtm image's own config dir without wiping its sample.yaml.
+            - name: grafana-dashboards
+              mountPath: /otel-lgtm/grafana/conf/provisioning/dashboards/mirador.yaml
+              subPath: mirador.yaml
+              readOnly: true
+            - name: grafana-dashboards
+              mountPath: /var/lib/grafana/dashboards/mirador/golden-signals.json
+              subPath: golden-signals.json
+              readOnly: true
+            - name: grafana-dashboards
+              mountPath: /var/lib/grafana/dashboards/mirador/canary.json
+              subPath: canary.json
+              readOnly: true
+            - name: grafana-dashboards
+              mountPath: /var/lib/grafana/dashboards/mirador/service-graph.json
+              subPath: service-graph.json
+              readOnly: true
+            # OTel Collector config override — adds kubeletstats +
+            # k8s_cluster receivers so lgtm's Mimir gets cluster-wide
+            # metrics without needing kube-prometheus-stack. ADR-0038.
+            - name: otelcol-config
+              mountPath: /otel-lgtm/otelcol-config.yaml
+              subPath: otelcol-config.yaml
+              readOnly: true
+      volumes:
+        - name: data
+          emptyDir: {}
+        - name: grafana-dashboards
+          configMap:
+            name: grafana-dashboards
+        - name: grafana-datasources-override
+          configMap:
+            name: grafana-datasources-override
+        - name: otelcol-config
+          configMap:
+            name: lgtm-otelcol-config

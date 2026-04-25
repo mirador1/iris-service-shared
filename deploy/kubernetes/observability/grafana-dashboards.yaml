@@ -1,0 +1,272 @@
+# =============================================================================
+# Grafana dashboards as code — provisioned into the LGTM pod via ConfigMap.
+#
+# Grafana's file-based provisioning reads two things:
+#   1. A provider YAML at /etc/grafana/provisioning/dashboards/*.yaml that
+#      declares where dashboard JSON lives and how often to scan for changes.
+#   2. The dashboard JSON files themselves at the path declared in (1).
+#
+# We deliver both via a single ConfigMap mounted at
+# /etc/grafana/provisioning/dashboards/ inside the otel-lgtm image. The image
+# only overwrites its own home.json — custom dashboards added here sit
+# alongside, visible in the sidebar as "Mirador / …".
+#
+# To edit a dashboard: tweak the JSON here, redeploy (Argo CD sync). Grafana
+# scans every 30 s and picks up the change without a restart.
+# =============================================================================
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-dashboards
+  namespace: infra
+  labels:
+    app.kubernetes.io/name: lgtm
+    app.kubernetes.io/component: grafana-dashboards
+data:
+  # ── Provider config — tells Grafana where to look ─────────────────────
+  mirador.yaml: |
+    apiVersion: 1
+    providers:
+      - name: mirador
+        orgId: 1
+        folder: Mirador
+        type: file
+        disableDeletion: false
+        updateIntervalSeconds: 30
+        allowUiUpdates: false
+        options:
+          # Where the dashboard JSONs live — see the volumeMount subPath
+          # entries in lgtm.yaml. Separate from the provider YAML's dir
+          # so Grafana does not try to parse the YAML as a dashboard.
+          path: /var/lib/grafana/dashboards/mirador
+
+  # ── Dashboard #1 — Golden signals (RED method) ───────────────────────
+  # Request rate + error rate + p95 latency + JVM heap — the minimum set
+  # that tells you "is the service healthy right now?" at a glance.
+  golden-signals.json: |
+    {
+      "title": "Mirador — Golden Signals",
+      "uid": "mirador-golden",
+      "tags": ["mirador", "red-method"],
+      "timezone": "browser",
+      "schemaVersion": 39,
+      "version": 1,
+      "refresh": "10s",
+      "time": { "from": "now-15m", "to": "now" },
+      "panels": [
+        {
+          "type": "timeseries",
+          "title": "Request rate (req/s)",
+          "gridPos": { "x": 0, "y": 0, "w": 12, "h": 8 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "sum by (uri) (rate(http_server_requests_seconds_count{namespace=\"app\",service=~\"mirador.*\"}[1m]))",
+              "legendFormat": "{{uri}}"
+            }
+          ],
+          "fieldConfig": { "defaults": { "unit": "reqps" } }
+        },
+        {
+          "type": "timeseries",
+          "title": "Error rate (% of 5xx)",
+          "gridPos": { "x": 12, "y": 0, "w": 12, "h": 8 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "sum(rate(http_server_requests_seconds_count{namespace=\"app\",service=~\"mirador.*\",status=~\"5..\"}[1m])) / sum(rate(http_server_requests_seconds_count{namespace=\"app\",service=~\"mirador.*\"}[1m]))",
+              "legendFormat": "5xx rate"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percentunit",
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "color": "green", "value": null },
+                  { "color": "orange", "value": 0.02 },
+                  { "color": "red", "value": 0.05 }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "type": "timeseries",
+          "title": "Latency p95 (ms)",
+          "gridPos": { "x": 0, "y": 8, "w": 12, "h": 8 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "histogram_quantile(0.95, sum by (le, uri) (rate(http_server_requests_seconds_bucket{namespace=\"app\",service=~\"mirador.*\"}[1m]))) * 1000",
+              "legendFormat": "{{uri}}"
+            }
+          ],
+          "fieldConfig": { "defaults": { "unit": "ms" } }
+        },
+        {
+          "type": "timeseries",
+          "title": "JVM heap usage (%)",
+          "gridPos": { "x": 12, "y": 8, "w": 12, "h": 8 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "jvm_memory_used_bytes{namespace=\"app\",service=~\"mirador.*\",area=\"heap\"} / jvm_memory_max_bytes{namespace=\"app\",service=~\"mirador.*\",area=\"heap\"}",
+              "legendFormat": "{{pod}}"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percentunit",
+              "max": 1,
+              "min": 0
+            }
+          }
+        }
+      ]
+    }
+
+  # ── Dashboard #2 — Canary rollout progress ───────────────────────────
+  # Shows stable vs canary request rate + error rate side-by-side while a
+  # Rollout step is paused. Matches the AnalysisTemplate's gating query so
+  # you can see what Argo Rollouts sees.
+  canary.json: |
+    {
+      "title": "Mirador — Canary rollout",
+      "uid": "mirador-canary",
+      "tags": ["mirador", "argo-rollouts"],
+      "timezone": "browser",
+      "schemaVersion": 39,
+      "version": 1,
+      "refresh": "10s",
+      "time": { "from": "now-30m", "to": "now" },
+      "panels": [
+        {
+          "type": "timeseries",
+          "title": "Request rate — stable vs canary (req/s)",
+          "gridPos": { "x": 0, "y": 0, "w": 24, "h": 8 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "sum by (rollout_role) (rate(http_server_requests_seconds_count{namespace=\"app\",service=~\"mirador.*\"}[1m]))",
+              "legendFormat": "{{rollout_role}}"
+            }
+          ],
+          "fieldConfig": { "defaults": { "unit": "reqps" } }
+        },
+        {
+          "type": "timeseries",
+          "title": "Error rate — stable vs canary",
+          "gridPos": { "x": 0, "y": 8, "w": 24, "h": 8 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "sum by (rollout_role) (rate(http_server_requests_seconds_count{namespace=\"app\",service=~\"mirador.*\",status=~\"5..\"}[1m])) / sum by (rollout_role) (rate(http_server_requests_seconds_count{namespace=\"app\",service=~\"mirador.*\"}[1m]))",
+              "legendFormat": "{{rollout_role}}"
+            }
+          ],
+          "fieldConfig": {
+            "defaults": {
+              "unit": "percentunit",
+              "thresholds": {
+                "mode": "absolute",
+                "steps": [
+                  { "color": "green", "value": null },
+                  { "color": "red", "value": 0.05 }
+                ]
+              }
+            }
+          }
+        }
+      ]
+    }
+
+  # ── Dashboard #3 — Service Graph (Tempo service map) ─────────────────
+  # Visual topology of service-to-service calls inferred from distributed
+  # traces. Tempo generates service_graph_* metrics from span ingestion
+  # (span_metrics_processor enabled in the LGTM bundle by default); we
+  # render them as:
+  #   • Panel 1 — Node graph: box per service, edges weighted by call rate
+  #     (Grafana "nodeGraph" panel, Tempo service-map query).
+  #   • Panel 2 — Top edges table: (client → server, rate, p95 latency)
+  #     sourced from traces_service_graph_request_* Prometheus metrics.
+  #
+  # Why: answers "who calls what, how often, how slow" at a glance —
+  # the dependency map the README badge promises. Complements
+  # golden-signals.json which shows the big aggregates.
+  service-graph.json: |
+    {
+      "title": "Mirador — Service Graph",
+      "uid": "mirador-service-graph",
+      "tags": ["mirador", "tempo", "service-map"],
+      "timezone": "browser",
+      "schemaVersion": 39,
+      "version": 1,
+      "refresh": "30s",
+      "time": { "from": "now-30m", "to": "now" },
+      "panels": [
+        {
+          "type": "nodeGraph",
+          "title": "Service topology (Tempo)",
+          "gridPos": { "x": 0, "y": 0, "w": 24, "h": 14 },
+          "datasource": { "type": "tempo", "uid": "tempo" },
+          "targets": [
+            {
+              "refId": "A",
+              "queryType": "serviceMap",
+              "serviceMapQuery": "{}"
+            }
+          ],
+          "description": "Nodes = services observed in distributed traces. Edges = calls between them. Color = error rate, size = request rate. Click a node to drill into Tempo traces."
+        },
+        {
+          "type": "table",
+          "title": "Top edges — call rate (req/s)",
+          "gridPos": { "x": 0, "y": 14, "w": 12, "h": 10 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "topk(10, sum by (client, server) (rate(traces_service_graph_request_total[5m])))",
+              "format": "table",
+              "instant": true
+            }
+          ],
+          "fieldConfig": {
+            "defaults": { "unit": "reqps" },
+            "overrides": [
+              { "matcher": { "id": "byName", "options": "Value" },
+                "properties": [{ "id": "displayName", "value": "req/s" }] }
+            ]
+          }
+        },
+        {
+          "type": "table",
+          "title": "Top edges — p95 server latency",
+          "gridPos": { "x": 12, "y": 14, "w": 12, "h": 10 },
+          "datasource": { "type": "prometheus", "uid": "prometheus" },
+          "targets": [
+            {
+              "refId": "A",
+              "expr": "topk(10, histogram_quantile(0.95, sum by (client, server, le) (rate(traces_service_graph_request_server_seconds_bucket[5m]))))",
+              "format": "table",
+              "instant": true
+            }
+          ],
+          "fieldConfig": {
+            "defaults": { "unit": "s" },
+            "overrides": [
+              { "matcher": { "id": "byName", "options": "Value" },
+                "properties": [{ "id": "displayName", "value": "p95 latency" }] }
+            ]
+          }
+        }
+      ]
+    }

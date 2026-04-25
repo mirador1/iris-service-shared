@@ -1,0 +1,103 @@
+apiVersion: 1
+
+# Overrides the default otel-lgtm datasource provisioning.
+#
+# Key customisation: Tempo tracesToLogsV2 uses a Loki label-selector query
+# ({trace_id="<id>"}) instead of a line-filter (| trace_id = "<id>").
+# The Spring Boot OTel Logback appender stores trace_id as a stream label in
+# Loki — label selectors are indexed and exact-match; line filters are not.
+#
+# Flow: Tempo span → click "Logs for this span" → Loki query
+#   {service_name="mirador", trace_id="<traceId>"}
+#
+# The Prometheus datasource points to Mimir (bundled in otel-lgtm, port 9090
+# internally) — replaces the former standalone Prometheus container.
+
+datasources:
+  - name: Prometheus
+    type: prometheus
+    uid: prometheus
+    url: http://127.0.0.1:9090
+    editable: true
+    jsonData:
+      timeInterval: 15s
+      exemplarTraceIdDestinations:
+        - name: trace_id
+          datasourceUid: tempo
+          urlDisplayLabel: "Trace: ${__value.raw}"
+
+  - name: Tempo
+    type: tempo
+    uid: tempo
+    url: http://127.0.0.1:3200
+    editable: true
+    jsonData:
+      tracesToLogsV2:
+        # trace_id is a Loki stream label (indexed) — use label selector, not line filter.
+        # ${__tags} expands to e.g. {service_name="mirador"} based on the tags mapping below.
+        customQuery: true
+        datasourceUid: loki
+        query: '{service_name="${__tags.service_name}", trace_id="${__trace.traceId}"}'
+        tags:
+          - key: service.name
+            value: service_name
+      tracesToMetrics:
+        datasourceUid: prometheus
+        tags:
+          - key: service.name
+            value: service_name
+      serviceMap:
+        datasourceUid: prometheus
+      search:
+        hide: false
+      nodeGraph:
+        enabled: true
+      lokiSearch:
+        datasourceUid: loki
+
+  - name: Loki
+    type: loki
+    uid: loki
+    url: http://127.0.0.1:3100
+    editable: true
+    # `isDefault: true` puts Loki at the top of the Explore datasource list
+    # so the Logs view opens with it selected by default (instead of Prometheus).
+    isDefault: false
+    jsonData:
+      # Pre-fills the Explore Logs query box with a `service_name=mirador`
+      # selector so the default Logs view only shows backend logs. Users can
+      # still edit or remove the filter in Explore — this is a starting
+      # point, not a hard restriction (Loki queries are still client-side
+      # evaluated against whatever log lines are in the time range).
+      #
+      # Requires Grafana 10.4+ (otel-lgtm 0.22.1 ships Grafana 11.x, so this
+      # is supported). The field is recognised by the Loki data-source
+      # plugin; older versions silently ignore it.
+      defaultQuery: '{service_name="mirador"} |= ``'
+      derivedFields:
+        # trace_id label on a Loki log entry → jump to the matching Tempo trace.
+        - name: trace_id
+          matcherType: label
+          matcherRegex: trace_id
+          url: "${__value.raw}"
+          datasourceUid: tempo
+          urlDisplayLabel: "Trace: ${__value.raw}"
+
+  - name: Pyroscope
+    type: grafana-pyroscope-datasource
+    uid: pyroscope
+    url: http://127.0.0.1:4040
+
+  # Infinity — generic HTTP/JSON datasource used to call Spring Boot Actuator
+  # REST endpoints (/actuator/health/*) directly. These endpoints are NOT
+  # exposed as Prometheus/OTLP metrics, so Infinity is the only way to get
+  # the exact UP/DOWN status for the Health Probes panels in the dashboard.
+  - name: Infinity
+    type: yesoreyeram-infinity-datasource
+    uid: infinity
+    editable: true
+    jsonData:
+      # Allow requests to the Spring Boot app running on the Docker host.
+      # host.docker.internal resolves to the host machine from inside the container.
+      allowedHosts:
+        - "http://host.docker.internal:8080"

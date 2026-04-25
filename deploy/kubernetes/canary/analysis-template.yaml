@@ -1,0 +1,63 @@
+# =============================================================================
+# AnalysisTemplate — error-rate gate for the canary rollout.
+#
+# Queries Mimir (LGTM pod's Prometheus-compatible endpoint) for the HTTP
+# error rate observed on the *canary* ReplicaSet during the last 1 minute.
+# If the rate of 5xx responses over total responses exceeds 5 %, the analysis
+# fails → the Rollout aborts → traffic stays on the stable pods.
+#
+# Success criteria: error-rate < 0.05 (5 %).
+# Failure criteria: error-rate ≥ 0.05 for 2 consecutive samples.
+#
+# The template runs as an inline metric check every 30 s for 2 minutes, so
+# the canary has time to warm up (JIT, class loading) before being judged.
+# Short enough to keep the rollout snappy; long enough to catch real issues.
+# =============================================================================
+apiVersion: argoproj.io/v1alpha1
+kind: AnalysisTemplate
+metadata:
+  name: mirador-error-rate
+  namespace: app
+spec:
+  args:
+    # Passed from the Rollout step (`args:` block). Lets the query know which
+    # service to look at — useful if we ever reuse this template for other
+    # Spring Boot backends in the same namespace.
+    - name: service-name
+
+  metrics:
+    - name: http-error-rate
+      # Evaluate every 30 s, up to 4 times (2 min total). Each sample must
+      # satisfy successCondition; 2 failures in a row triggers `failureLimit`.
+      interval: 30s
+      count: 4
+      successCondition: result[0] < 0.05
+      failureLimit: 1
+      failureCondition: result[0] >= 0.05
+      # Treat "no data yet" as inconclusive rather than fail — the canary
+      # may not have received traffic during the first sample window.
+      inconclusiveLimit: 2
+
+      provider:
+        prometheus:
+          # Points at the LGTM pod's Mimir endpoint (Prometheus-compatible).
+          # The service is deployed by `base/observability/lgtm.yaml` in the
+          # `infra` namespace; Mimir listens on port 9009.
+          address: http://lgtm.infra.svc.cluster.local:9009/prometheus
+          query: |
+            sum(
+              rate(http_server_requests_seconds_count{
+                namespace="app",
+                service="{{args.service-name}}",
+                rollout-role="canary",
+                status=~"5.."
+              }[1m])
+            )
+            /
+            sum(
+              rate(http_server_requests_seconds_count{
+                namespace="app",
+                service="{{args.service-name}}",
+                rollout-role="canary"
+              }[1m])
+            )

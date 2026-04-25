@@ -1,0 +1,256 @@
+# =============================================================================
+# lgtm-k8s-receivers.yaml — extend lgtm's OTel Collector with kubeletstats
+#                          + k8s_cluster receivers
+#
+# Why this exists:
+# The `grafana/otel-lgtm` image ships an OTel Collector that only accepts
+# OTLP pushes from application code. It does NOT scrape kubelet / the
+# Kubernetes API server, so Mimir (its embedded Prometheus backend) has
+# zero cluster-wide metrics — only what Mirador itself emits.
+#
+# This is the wrong shape for:
+#   - OpenLens "Metrics" tab (needs `container_cpu_usage_seconds_total`
+#     from kubelet/cadvisor → was erroring "missing or invalid Prometheus
+#     configuration")
+#   - HPA (needs `metrics.k8s.io` — addressed separately via metrics-server,
+#     but once this kubeletstats pipeline is live, HPA can optionally
+#     switch to `custom.metrics.k8s.io` backed by our Mimir)
+#   - Any Grafana dashboard showing node/pod resource use
+#
+# What this ConfigMap adds to the Collector's config.yaml:
+#   - `kubeletstats` receiver  → scrapes the Kubelet's /stats/summary on
+#     each node (CPU, memory, network, fs per container & pod & node)
+#   - `k8s_cluster` receiver   → watches the K8s API for resource state
+#     (pod phases, deployment readiness, container restarts, etc.)
+#
+# Both receivers route into the EXISTING `metrics` pipeline → Mimir.
+# Grafana (via lgtm) + OpenLens (via Mimir's Prometheus-compat API on 9009)
+# see them immediately.
+#
+# Why not kube-prometheus-stack:
+# That stack ships ~30 pods (Prometheus + Alertmanager + Grafana + node-
+# exporter DaemonSet + kube-state-metrics + operator + reloaders + HA
+# sidecars). For an ephemeral demo cluster (ADR-0022, €10/month cap) we
+# already run lgtm (1 pod) which contains Mimir. Adding 2 Collector
+# receivers to an existing pod delivers ~90% of the useful functionality
+# at 0% additional pod cost. See docs/architecture/observability.md for
+# the tradeoff table.
+#
+# What's NOT covered (vs kube-prometheus-stack):
+#   - Alertmanager → use Grafana's alert rules + webhook (basic routing)
+#   - Long-term storage (Mimir here is emptyDir) → acceptable for demo
+#   - HA (lgtm is 1 replica) → acceptable for demo
+# =============================================================================
+
+# ── RBAC for the receivers ───────────────────────────────────────────────────
+# kubeletstats needs `nodes/stats` + `nodes/proxy`, k8s_cluster needs
+# get/list/watch on most resources. Single ServiceAccount covers both.
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: lgtm-collector
+  namespace: infra
+  labels:
+    app.kubernetes.io/name: lgtm
+    app.kubernetes.io/component: otel-collector-receivers
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: lgtm-collector
+  labels:
+    app.kubernetes.io/name: lgtm
+    app.kubernetes.io/component: otel-collector-receivers
+rules:
+  # kubeletstats: hit /stats/summary on each node via the K8s API proxy.
+  - apiGroups: [""]
+    resources: ["nodes/stats", "nodes/proxy"]
+    verbs: ["get"]
+  - apiGroups: [""]
+    resources: ["nodes"]
+    verbs: ["get", "list", "watch"]
+  # k8s_cluster receiver: observe cluster state.
+  - apiGroups: [""]
+    resources:
+      - namespaces
+      - nodes
+      - pods
+      - services
+      - endpoints
+      - events
+      - configmaps
+      - persistentvolumes
+      - persistentvolumeclaims
+      - replicationcontrollers
+      - resourcequotas
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["apps"]
+    resources:
+      - deployments
+      - daemonsets
+      - replicasets
+      - statefulsets
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["batch"]
+    resources: ["jobs", "cronjobs"]
+    verbs: ["get", "list", "watch"]
+  - apiGroups: ["autoscaling"]
+    resources: ["horizontalpodautoscalers"]
+    verbs: ["get", "list", "watch"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: lgtm-collector
+  labels:
+    app.kubernetes.io/name: lgtm
+    app.kubernetes.io/component: otel-collector-receivers
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: lgtm-collector
+subjects:
+  - kind: ServiceAccount
+    name: lgtm-collector
+    namespace: infra
+---
+# ── Full Collector config override ───────────────────────────────────────────
+# The image reads /otel-lgtm/otelcol-config.yaml. We mount THIS ConfigMap
+# as a subPath into that exact file, preserving the rest of /otel-lgtm/
+# (Grafana dashboards, Tempo config, etc.). The content is the upstream
+# defaults + the 2 new receivers wired into the existing pipelines.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: lgtm-otelcol-config
+  namespace: infra
+  labels:
+    app.kubernetes.io/name: lgtm
+data:
+  otelcol-config.yaml: |
+    receivers:
+      # ── Existing receivers — identical to the upstream image default ───
+      otlp:
+        protocols:
+          grpc:
+            endpoint: 0.0.0.0:4317
+          http:
+            endpoint: 0.0.0.0:4318
+            cors:
+              allowed_origins:
+                - http://*
+      prometheus/collector:
+        config:
+          scrape_configs:
+            - job_name: "opentelemetry-collector"
+              scrape_interval: 1s
+              static_configs:
+                - targets: ["127.0.0.1:8888"]
+
+      # ── NEW: kubeletstats ──────────────────────────────────────────────
+      # Scrapes each node's kubelet for CPU / memory / network / fs metrics
+      # per container, pod, and node. 30s interval — matches what kube-
+      # prometheus-stack uses by default (enough granularity, low load).
+      # auth_type=serviceAccount uses the Pod's mounted token.
+      # endpoint=${K8S_NODE_NAME}:10250 resolves via env var injected in
+      # the Deployment spec (downward API).
+      kubeletstats:
+        collection_interval: 30s
+        auth_type: "serviceAccount"
+        endpoint: "${env:K8S_NODE_NAME}:10250"
+        insecure_skip_verify: true   # kind self-signed kubelet cert
+        metric_groups:
+          - node
+          - pod
+          - container
+
+      # ── NEW: k8s_cluster ───────────────────────────────────────────────
+      # Watches the K8s API for resource state (pod phases, deployment
+      # ready counts, container restart counts, node conditions, HPA
+      # targets). Single replica of this receiver per cluster — fine
+      # because it's a READ-only watcher, not a scraper.
+      k8s_cluster:
+        collection_interval: 30s
+        node_conditions_to_report: [Ready, DiskPressure, MemoryPressure, PIDPressure, NetworkUnavailable]
+        distribution: kubernetes
+
+    extensions:
+      health_check:
+        endpoint: 0.0.0.0:13133
+        path: "/ready"
+
+    processors:
+      batch:
+      # ── OpenLens / kube-prometheus-stack metric name compatibility ─────
+      # OpenLens hardcodes queries like `rate(container_cpu_usage_seconds_total[1m])`.
+      # OTel semantic conventions emit `container.cpu.time` which Mimir stores
+      # as `container_cpu_time_seconds_total` — different name, same data.
+      # This processor aliases OTel names to the Prometheus-community /
+      # kube-state-metrics names so OpenLens's hardcoded dashboards light
+      # up with our data. See ADR-0038 "OpenLens compatibility aliases".
+      metricstransform/openlens-aliases:
+        transforms:
+          - include: container.cpu.time
+            match_type: strict
+            action: insert
+            new_name: container_cpu_usage_seconds_total
+          - include: container.memory.usage
+            match_type: strict
+            action: insert
+            new_name: container_memory_working_set_bytes
+          - include: container.filesystem.usage
+            match_type: strict
+            action: insert
+            new_name: container_fs_usage_bytes
+          - include: k8s.pod.phase
+            match_type: strict
+            action: insert
+            new_name: kube_pod_status_phase
+          - include: k8s.container.ready
+            match_type: strict
+            action: insert
+            new_name: kube_pod_container_status_ready
+          - include: k8s.node.condition_ready
+            match_type: strict
+            action: insert
+            new_name: kube_node_status_condition
+
+    exporters:
+      otlp_http/metrics:
+        endpoint: http://127.0.0.1:9090/api/v1/otlp
+        tls:
+          insecure: true
+      otlp_http/traces:
+        endpoint: http://127.0.0.1:4418
+        tls:
+          insecure: true
+      otlp_http/logs:
+        endpoint: http://127.0.0.1:3100/otlp
+        tls:
+          insecure: true
+      otlp/profiles:
+        endpoint: http://127.0.0.1:4040
+        tls:
+          insecure: true
+
+    service:
+      extensions: [health_check]
+      pipelines:
+        traces:
+          receivers: [otlp]
+          processors: [batch]
+          exporters: [otlp_http/traces]
+        metrics:
+          # NEW receivers added to the existing metrics pipeline.
+          receivers: [otlp, prometheus/collector, kubeletstats, k8s_cluster]
+          # batch groups samples before export; metricstransform aliases
+          # OTel metric names to Prometheus-community names for OpenLens.
+          processors: [batch, metricstransform/openlens-aliases]
+          exporters: [otlp_http/metrics]
+        logs:
+          receivers: [otlp]
+          processors: [batch]
+          exporters: [otlp_http/logs]
+        profiles:
+          receivers: [otlp]
+          exporters: [otlp/profiles]

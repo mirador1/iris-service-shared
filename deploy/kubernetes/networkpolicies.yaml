@@ -1,0 +1,267 @@
+# =============================================================================
+# NetworkPolicies — default-deny + explicit allowlist.
+#
+# The default K8s behaviour is to allow ALL pod-to-pod traffic. That's a
+# CKS audit failure in any production cluster. These policies flip it:
+#
+#   1. default-deny-all — denies all ingress AND egress in `app` + `infra`.
+#   2. allow-app-*      — re-opens the specific paths the app needs:
+#                           app → infra:postgres:5432
+#                           app → infra:redis:6379
+#                           app → infra:kafka:9092
+#                           app → DNS  (kube-system:10053)
+#                           ingress-nginx → app:8080
+#                           app → internet (HTTPS to Auth0, OTLP, Ollama, GitLab)
+#
+# Requires a NetworkPolicy-aware CNI. GKE Dataplane V2 (Cilium) + Autopilot
+# have this on by default. kind works if we install Calico; local overlay
+# is OK today because we skip these tighter policies there (see local
+# overlay kustomization — add when convenient).
+#
+# CAUTION: once default-deny is in, any forgotten label selector == broken
+# app. The rollout should go through a staging cluster first. All probes
+# and health checks are "from kubelet → pod" (handled by the container
+# runtime, not policy-gated); readiness probes still work.
+# =============================================================================
+
+# ── 1. default-deny-all — denies everything not explicitly permitted ──────────
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+  namespace: app
+  labels:
+    app.kubernetes.io/part-of: mirador
+spec:
+  podSelector: {}              # empty selector = all pods in the namespace
+  policyTypes:
+    - Ingress
+    - Egress
+  # No ingress / egress rules = deny all.
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny-all
+  namespace: infra
+  labels:
+    app.kubernetes.io/part-of: mirador
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress
+
+# ── 2. allow-dns — every pod needs DNS, always ────────────────────────────────
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-dns
+  namespace: app
+spec:
+  podSelector: {}
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        # Standard kube-dns in the kube-system namespace (kind/EKS/AKS/on-prem).
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+        # NodeLocal DNS Cache on GKE — runs hostNetwork at 169.254.20.10 on
+        # every node, NOT in kube-system. Pods' resolv.conf points here.
+        # Without this, DNS times out on GKE Autopilot under default-deny.
+        - ipBlock:
+            cidr: 169.254.20.10/32
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-dns
+  namespace: infra
+spec:
+  podSelector: {}
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        # Standard kube-dns in the kube-system namespace (kind/EKS/AKS/on-prem).
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+        # NodeLocal DNS Cache on GKE — runs hostNetwork at 169.254.20.10 on
+        # every node, NOT in kube-system. Pods' resolv.conf points here.
+        # Without this, DNS times out on GKE Autopilot under default-deny.
+        - ipBlock:
+            cidr: 169.254.20.10/32
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53
+
+# ── 3. allow-port-forward-to-backend — kubectl → mirador:8080 ────────────────
+# Replaces the former allow-ingress-to-backend. `kubectl port-forward` routes
+# traffic through the kubelet which appears as the node IP, NOT as a pod in
+# ingress-nginx. Allowing from everywhere in the cluster is acceptable
+# here — the cluster has no public surface (ADR-0025), so anything that
+# can reach :8080 is already authenticated against the API server.
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-port-forward-to-backend
+  namespace: app
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: mirador
+      app.kubernetes.io/component: backend
+  policyTypes:
+    - Ingress
+  ingress:
+    - ports:
+        - protocol: TCP
+          port: 8080
+
+# allow-ingress-to-frontend removed with ADR-0025 — no UI Deployment in the
+# cluster anymore (UI runs on the developer laptop, accesses the cluster
+# through kubectl port-forward). The ingress-nginx controller itself is
+# also uninstalled by `bin/cluster/demo/up.sh`.
+
+# ── 5. allow-backend-to-infra — app → postgres/redis/kafka ────────────────────
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-backend-egress-to-infra
+  namespace: app
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: mirador
+      app.kubernetes.io/component: backend
+  policyTypes:
+    - Egress
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: infra
+      ports:
+        - protocol: TCP
+          port: 5432   # PostgreSQL
+        - protocol: TCP
+          port: 6379   # Redis
+        - protocol: TCP
+          port: 9092   # Kafka
+---
+# Inverse: infra namespace accepts traffic from the app namespace on those ports.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-app-ingress-to-infra
+  namespace: infra
+spec:
+  podSelector: {}               # applies to every pod in infra
+  policyTypes:
+    - Ingress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: app
+      ports:
+        - protocol: TCP
+          port: 5432
+        - protocol: TCP
+          port: 6379
+        - protocol: TCP
+          port: 9092
+
+# ── 5b. allow-infra-intra — infra pods talking to each other ──────────────
+# Added when Unleash landed (ADR-0024 side-effect): Unleash's initContainer
+# calls pg_isready against unleash-db, both in the infra namespace. Without
+# this policy, default-deny-all blocks the pod-to-pod TCP 5432, so the init
+# container hangs forever. Keep this narrow — only DB and cache ports — so
+# a compromise of one infra pod can't scan the whole namespace.
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-infra-intra
+  namespace: infra
+spec:
+  podSelector: {}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: infra
+      ports:
+        - protocol: TCP
+          port: 5432      # postgres (app + unleash)
+        - protocol: TCP
+          port: 6379      # redis
+        - protocol: TCP
+          port: 9092      # kafka
+        - protocol: TCP
+          port: 4242      # unleash API
+        - protocol: TCP
+          port: 8080      # keycloak
+        - protocol: TCP
+          port: 3000      # grafana (LGTM)
+        - protocol: TCP
+          port: 3100      # loki
+        - protocol: TCP
+          port: 3200      # tempo
+        - protocol: TCP
+          port: 9009      # mimir
+        - protocol: TCP
+          port: 4317      # OTLP gRPC
+        - protocol: TCP
+          port: 4318      # OTLP HTTP
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: infra
+
+# ── 6. allow-backend-https-egress — Auth0 / Ollama / Grafana OTLP / GitLab ───
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-backend-egress-https
+  namespace: app
+spec:
+  podSelector:
+    matchLabels:
+      app.kubernetes.io/name: mirador
+      app.kubernetes.io/component: backend
+  policyTypes:
+    - Egress
+  egress:
+    # Note: a fully-tight policy would target by CIDR or use Cilium FQDNPolicy.
+    # For now, allow outbound 443 to any destination EXCEPT the cluster itself
+    # (to avoid bypassing the other policies). "except" blocks the default
+    # K8s pod CIDR ranges; adjust to your cluster if non-default.
+    - to:
+        - ipBlock:
+            cidr: 0.0.0.0/0
+            except:
+              - 10.0.0.0/8     # RFC1918 — private cluster networks
+              - 172.16.0.0/12  # RFC1918
+              - 192.168.0.0/16 # RFC1918
+      ports:
+        - protocol: TCP
+          port: 443

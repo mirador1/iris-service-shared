@@ -1,0 +1,22 @@
+# =============================================================================
+# canary/ — Argo Rollouts CRs (Rollout + AnalysisTemplate) for mirador backend.
+#
+# Opt-in module — NOT wired into `base/kustomization.yaml`. Apply separately
+# after Argo Rollouts controller is installed:
+#
+#   kubectl apply -k deploy/kubernetes/base/canary
+#
+# `bin/cluster/demo/up.sh` (full mode) does the right thing automatically:
+#   1. install argo-rollouts controller
+#   2. `kubectl delete deployment mirador -n app` (surrender pod ownership)
+#   3. apply this kustomization
+#
+# On fast-mode boot the Rollouts CRD isn't installed — the base Deployment
+# stays in charge and no canary machinery runs.
+# =============================================================================
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - rollout.yaml
+  - analysis-template.yaml

@@ -1,0 +1,66 @@
+{
+  "title": "Logs — Mirador (service_name=mirador)",
+  "uid": "mirador-logs",
+  "schemaVersion": 39,
+  "tags": ["mirador", "logs", "auto"],
+  "time": { "from": "now-15m", "to": "now" },
+  "refresh": "10s",
+  "timepicker": { "refresh_intervals": ["5s", "10s", "30s", "1m", "5m"] },
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 0,
+  "liveNow": false,
+  "weekStart": "",
+  "panels": [
+    {
+      "id": 1,
+      "type": "logs",
+      "title": "Mirador backend logs",
+      "description": "Live tail of the Spring Boot logs emitted via the OpenTelemetry Logback appender, filtered by the OTel resource attribute `service.name` (exported as the `service_name` Loki label). Edit the query at the top of the panel to broaden or narrow the filter — the default is `{service_name=\"mirador\"}` which matches only backend logs.",
+      "gridPos": { "x": 0, "y": 0, "w": 24, "h": 28 },
+      "datasource": { "type": "loki", "uid": "loki" },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": { "type": "loki", "uid": "loki" },
+          "expr": "{service_name=\"mirador\"} |= ``",
+          "queryType": "range",
+          "legendFormat": ""
+        }
+      ],
+      "options": {
+        "showTime": true,
+        "showLabels": false,
+        "showCommonLabels": false,
+        "wrapLogMessage": true,
+        "prettifyLogMessage": false,
+        "enableLogDetails": true,
+        "dedupStrategy": "none",
+        "sortOrder": "Descending"
+      }
+    }
+  ],
+  "templating": {
+    "list": [
+      {
+        "name": "level",
+        "type": "custom",
+        "label": "Level",
+        "query": "INFO,WARN,ERROR,DEBUG,TRACE",
+        "current": { "text": "All", "value": "$__all" },
+        "options": [
+          { "selected": true, "text": "All", "value": "$__all" },
+          { "selected": false, "text": "INFO", "value": "INFO" },
+          { "selected": false, "text": "WARN", "value": "WARN" },
+          { "selected": false, "text": "ERROR", "value": "ERROR" },
+          { "selected": false, "text": "DEBUG", "value": "DEBUG" },
+          { "selected": false, "text": "TRACE", "value": "TRACE" }
+        ],
+        "includeAll": true,
+        "multi": false
+      }
+    ]
+  },
+  "annotations": { "list": [] },
+  "version": 1
+}

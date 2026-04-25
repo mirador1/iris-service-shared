@@ -1,0 +1,35 @@
+# =============================================================================
+# Prometheus scrape configuration
+#
+# This file is mounted into the Prometheus container via deploy/compose/observability.yml.
+# Prometheus scrapes the Spring Boot Actuator Prometheus endpoint at the configured interval
+# and stores time-series metrics in its local TSDB.
+#
+# Grafana then queries Prometheus as a datasource to render dashboards.
+#
+# Scrape targets:
+#   - customerservice: the Spring Boot application running on the host machine (not in Docker),
+#     accessible via host.docker.internal from within the Docker network.
+#     The path /actuator/prometheus is exposed by Micrometer's Prometheus registry.
+#
+# On Linux, replace host.docker.internal with the host machine's Docker gateway IP
+# (typically 172.17.0.1) if host.docker.internal is not supported.
+# =============================================================================
+
+global:
+  # How often Prometheus scrapes targets (collect new metric values)
+  scrape_interval: 15s
+  # How often Prometheus evaluates alerting/recording rules
+  evaluation_interval: 15s
+
+scrape_configs:
+
+  # Spring Boot Actuator — exposes all Micrometer metrics in Prometheus format
+  # Endpoint: GET /actuator/prometheus
+  # Metrics include: JVM, HTTP server, DB connection pool, Kafka, custom counters/timers/gauges
+  - job_name: 'customerservice'
+    metrics_path: /actuator/prometheus
+    static_configs:
+      # host.docker.internal resolves to the Docker host — allows Prometheus (in Docker)
+      # to scrape the Spring app running on the host machine (outside Docker)
+      - targets: ['host.docker.internal:8080']

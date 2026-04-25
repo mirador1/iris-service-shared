@@ -1,0 +1,46 @@
+# =============================================================================
+# terraform.tfvars.example — copy to terraform.tfvars and fill in your values
+#
+# terraform.tfvars is in .gitignore — never commit credentials or project IDs.
+# In CI, use TF_VAR_* environment variables instead of a tfvars file.
+#
+# Fill in exactly the three required variables; the rest have sensible
+# defaults in variables.tf (region = europe-west1, cluster_name = mirador-prod).
+# =============================================================================
+
+# Required — GCP project ID (see CLAUDE.md for the mirador project).
+project_id   = "your-gcp-project-id"
+
+# Optional — defaults to europe-west1 (see ADR-0030). Only override if you
+# genuinely need a different region; every other part of the stack (LB IP,
+# DuckDNS record, Artifact Registry location) assumes this region.
+region       = "europe-west1"
+
+# Optional — defaults to mirador-prod. CI variable GKE_CLUSTER must match.
+cluster_name = "mirador"
+
+# Required — public hostname served by the ingress. Must match the DuckDNS
+# A record (or equivalent DNS) and the cert-manager Certificate resource.
+app_host     = "mirador.yourdomain.com"
+
+# =============================================================================
+# Stale leftovers — below this line the variables no longer exist in
+# variables.tf. They remained here as historical context after ADR-0013
+# (Cloud SQL → in-cluster Postgres) and ADR-0021 (cost-deferred patterns).
+# Safe to delete but kept so a reviewer reading this file can correlate
+# with older commits / the archived reactivation runbook at
+# docs/archive/terraform-deferred/.
+# =============================================================================
+# db_name     = "mirador"
+# db_user     = "demo"
+# db_password = "CHANGE_ME_strong_password_here"
+# db_tier     = "db-f1-micro"   # dev: db-f1-micro (~$7/mo) | prod: db-n1-standard-1 (~$50/mo)
+#
+# redis_tier           = "BASIC"   # dev: BASIC | prod: STANDARD_HA
+# redis_memory_size_gb = 1
+#
+# Confluent Cloud Kafka (optional — leave false to use in-cluster Kafka)
+# confluent_kafka_enabled    = false
+# confluent_cloud_api_key    = ""
+# confluent_cloud_api_secret = ""
+# confluent_environment_id   = ""

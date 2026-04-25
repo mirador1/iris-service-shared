@@ -1,0 +1,18 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+resources:
+  - lgtm.yaml
+  - pyroscope.yaml
+  # Grafana dashboards provisioned as code — RED-method golden signals +
+  # canary rollout view + service graph. Mounted into the LGTM pod at the
+  # provisioning path via the volumeMount patch below (see lgtm.yaml).
+  - grafana-dashboards.yaml
+  # Grafana datasource override — adds exemplar→Tempo trace linking to
+  # the Prometheus/Mimir datasource (Phase 2 O1). Replaces the default
+  # datasources.yaml shipped by the otel-lgtm image.
+  - grafana-datasources.yaml
+  # OTel Collector receivers for cluster-wide metrics (kubeletstats +
+  # k8s_cluster). Adds ~90% of kube-prometheus-stack's useful scope at 0
+  # extra pod cost. See ADR-0038 for the full rationale.
+  - lgtm-k8s-receivers.yaml

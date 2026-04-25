@@ -1,0 +1,31 @@
+# OVH Cloud module — example tfvars file.
+#
+# Usage:
+#   1. Copy to terraform.tfvars (NEVER committed, see .gitignore)
+#   2. Fill in real values
+#   3. terraform init && terraform plan
+#
+# Better practice: pass values via TF_VAR_<name> env vars so the
+# secrets never touch disk. Example .env file (also gitignored):
+#
+#   export TF_VAR_ovh_project_id="abcdef0123456789abcdef0123456789"
+#   export TF_VAR_ovh_application_key="XXXXXXXXXXXXXXXX"
+#   export TF_VAR_ovh_application_secret="YYYYYYYYYYYYYYYYYYYYYYYYYYYYYYY"
+#   export TF_VAR_ovh_consumer_key="ZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZZ"
+#
+# See README.md § "Authentication" for how to generate the credentials
+# at https://eu.api.ovh.com/createToken/ .
+
+ovh_project_id         = "<32-char hex from manager URL>"
+ovh_application_key    = "<from createToken/>"
+ovh_application_secret = "<from createToken/>"
+ovh_consumer_key       = "<from createToken/>"
+
+# Optional overrides (defaults in variables.tf):
+# region            = "GRA9"
+# cluster_name      = "mirador-prod"
+# k8s_version       = "1.31"
+# node_flavor       = "B2-7"
+# node_count_desired = 1
+# node_count_min     = 1
+# node_count_max     = 2

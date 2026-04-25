@@ -1,0 +1,30 @@
+apiVersion: 1
+
+# Grafana dashboard provisioning — LGTM stack variant
+#
+# This file is loaded by the Grafana instance embedded in grafana/otel-lgtm
+# (started via ./run.sh obs). It registers demo.json as a dashboard at startup.
+#
+# Stack: OTel Collector → Prometheus (metrics) + Loki (logs) + Tempo (traces)
+# Datasource used by demo.json: Prometheus
+#
+# Difference from dashboards/dashboard-demo-lgtm.yaml:
+#   Metric names use the _milliseconds_ suffix (OTel SDK convention) instead
+#   of _seconds_ (Micrometer direct-scrape convention). Both dashboards track
+#   the same business signals — only the unit suffix differs.
+#
+# Path inside the otel-lgtm container: /otel-lgtm/demo.json
+# (mounted via deploy/compose/observability.yml)
+
+providers:
+  - name: customerservice
+    orgId: 1
+    folder: customerservice   # dashboard folder visible in the Grafana UI
+    type: file
+    disableDeletion: false  # allow manual deletion from the Grafana UI without it being re-created on next reload
+    updateIntervalSeconds: 10  # hot-reload interval — changes to demo.json appear within 10 s
+    options:
+      # Directory mount — Grafana scans every updateIntervalSeconds for new/changed *.json files.
+      # Add a new dashboard: drop a JSON file in infra/observability/grafana/dashboards-lgtm/
+      # and it appears in Grafana within 10 s without restarting the container.
+      path: /otel-lgtm/dashboards/
