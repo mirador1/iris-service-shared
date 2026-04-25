@@ -1,0 +1,17 @@
+# OS
+.DS_Store
+Thumbs.db
+
+# IDE
+.idea/
+.vscode/
+
+# Logs
+*.log
+
+# Local secrets (never commit OVH/GCP creds)
+.env
+.env.local
+*.pem
+*.key
+service-account-*.json

@@ -1,0 +1,36 @@
+# Conventional Commits CI template — included by all 3 mirador repos.
+# Validates merge-request-event commits (the lefthook hook catches local
+# commits ; this is the second-line backstop in CI).
+#
+# Usage in consumer .gitlab-ci.yml :
+#   include:
+#     - project: 'mirador1/mirador-shared'
+#       ref: main
+#       file: 'ci-templates/conventional-commits.yml'
+
+conventional-commits:
+  stage: validate
+  image: alpine:3.20
+  rules:
+    - if: $CI_PIPELINE_SOURCE == "merge_request_event"
+  before_script:
+    - apk add --no-cache git grep
+  script:
+    - |
+      # Validate every commit in the MR (not just the head).
+      git fetch origin "$CI_MERGE_REQUEST_TARGET_BRANCH_NAME" --depth=50
+      base=$(git merge-base "origin/$CI_MERGE_REQUEST_TARGET_BRANCH_NAME" HEAD)
+      regex='^(feat|fix|docs|style|refactor|perf|test|build|ci|chore|revert)(\([a-zA-Z0-9._/-]+\))?!?: .{1,72}$'
+      bad=0
+      while IFS= read -r sha; do
+        msg=$(git log -1 --format=%s "$sha")
+        if ! echo "$msg" | grep -qE "$regex"; then
+          echo "❌ $sha: $msg"
+          bad=$((bad + 1))
+        fi
+      done < <(git log --format=%H "$base..HEAD")
+      if [ $bad -gt 0 ]; then
+        echo "$bad commit(s) violate Conventional Commits."
+        exit 1
+      fi
+      echo "✅ All commits in this MR follow Conventional Commits."
