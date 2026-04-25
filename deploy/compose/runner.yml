@@ -1,0 +1,68 @@
+# =============================================================================
+# GitLab Runner — local CI execution
+#
+# Runs GitLab CI jobs on your machine instead of gitlab.com shared runners.
+# This means:
+#   - Zero CI minutes consumed on gitlab.com
+#   - Full access to your local Docker cache (faster builds)
+#   - No network bottleneck pulling Maven/npm artifacts
+#
+# Setup (one-time):
+#   1. docker compose -f docker-compose.runner.yml up -d
+#   2. ./scripts/register-runner.sh   (follow the prompts)
+#   3. Push code — jobs now run locally
+#
+# The runner connects to gitlab.com via long-polling (outbound HTTPS only).
+# No port needs to be opened on your machine.
+#
+# Tear down:
+#   docker compose -f docker-compose.runner.yml down
+# =============================================================================
+
+services:
+
+  gitlab-runner:
+    image: gitlab/gitlab-runner:latest
+    container_name: gitlab-runner
+    restart: unless-stopped
+
+    volumes:
+      # Persistent runner config (registration token, executor settings)
+      - gitlab-runner-config:/etc/gitlab-runner
+
+      # Mount the host Docker socket so the runner can spin up DinD containers
+      # for Testcontainers, docker-build jobs, etc.
+      # Security note: this gives the runner full Docker access on the host.
+      # Acceptable for a personal dev machine; use a dedicated VM in shared envs.
+      - /var/run/docker.sock:/var/run/docker.sock
+
+    environment:
+      # Speed up job pickup — default is 3s; 1s feels more responsive locally
+      - RUNNER_REQUEST_CONCURRENCY=4
+
+      # TOP-LEVEL runner concurrency. This is what actually lets independent
+      # CI jobs run in parallel on this machine. Default is 1 (pure serial
+      # execution) which makes every pipeline wall-clock equal to the sum
+      # of job durations. Setting it to 4 lets up to four jobs run
+      # simultaneously — empirically the sweet spot on an 8-core M-series
+      # with Docker Desktop (leaves headroom for Testcontainers fork
+      # containers spawned by integration-test).
+      #
+      # NOTE: this env var is only read on FIRST start (when config.toml
+      # does not yet exist in the volume). If the runner was registered
+      # before this line was added, patch the live config:
+      #   docker exec gitlab-runner sed -i \\
+      #     's/^concurrent = [0-9]\\+/concurrent = 4/' \\
+      #     /etc/gitlab-runner/config.toml
+      #   docker restart gitlab-runner
+      - CONCURRENT=4
+
+    # Keep the runner on the default bridge so it can reach gitlab.com
+    # and local services (kind cluster, local registry) by IP if needed.
+    network_mode: bridge
+
+volumes:
+  # Config volume — survives `docker compose down` and `docker compose up`
+  # Contains the registered runner credentials. Back it up if you re-register.
+  gitlab-runner-config:
+    name: gitlab-runner-config

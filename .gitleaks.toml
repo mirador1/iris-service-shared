@@ -1,0 +1,70 @@
+# =============================================================================
+# gitleaks config — secret scanner
+#
+# Runs on:
+#   - pre-commit (via lefthook) — scans staged changes
+#   - CI        (via .gitlab-ci.yml `secret-scan` job) — scans the whole repo
+#
+# Config schema for gitleaks 8.21+:
+#   - Top-level allowlist uses singular `[allowlist]` (map, not slice).
+#     The plural `[[allowlists]]` form also parses but does NOT enforce
+#     the `paths` field in our testing — paths were silently ignored and
+#     the scan produced false positives on every `target/`, `node_modules/`,
+#     and `docs/api/api.md` hit. Always use the singular form.
+#   - Per-rule allowlist uses `[rules.<id>.allowlist]` (singular map); the
+#     pre-8.21 `[[rules.<id>.allowlist]]` slice form is rejected with
+#     "expected a map, got 'slice'".
+# =============================================================================
+
+title = "Mirador Service — gitleaks config"
+
+# Extend the built-in ruleset (AWS, GCP, Azure, GitHub, GitLab, npm, PyPI,
+# generic-api-key, high-entropy, etc.). See:
+# https://github.com/gitleaks/gitleaks/blob/master/config/gitleaks.toml
+[extend]
+useDefault = true
+
+# -----------------------------------------------------------------------------
+# Allowlist — strings and paths that look like secrets but aren't.
+# A finding is ignored if it matches EITHER `paths` OR `regexes`.
+# -----------------------------------------------------------------------------
+
+[allowlist]
+description = "Global allowlist — paths and content that would match default rules but aren't real secrets."
+paths = [
+  '''\.env''',                     # .env and .env.example templates (gitignored; only .env.example tracked)
+  '''docs/examples/.+\.json''',    # sample payloads
+  '''docs/api/api\.md''',          # curl examples with $TOKEN + demo-api-key placeholders
+  '''docker-compose\.yml''',       # comments show "curl -u demo:demo" / "admin:admin" dev creds
+  '''src/test/resources/.+\.ya?ml''',
+  # Generated output — never contains real secrets, but may match entropy rules.
+  '''target/''',
+  '''node_modules/''',
+  # Claude Code worktrees (local-only sandbox clones) — gitignored anyway.
+  '''\.claude/''',
+]
+regexes = [
+  # Demo credentials used in dev docker-compose + README examples.
+  '''demo''',
+  '''local-dev-jwt-secret-min-32-chars-long''',
+  '''local-dev-api-key''',
+  # Keycloak default admin user documented in README.
+  '''admin/admin''',
+  # Local SonarQube dev default — used by bin/dev/stability-check.sh
+  # to query /api/projects/search (admin auth required for that endpoint).
+  '''admin:admin''',
+  # Fake JWT tokens in tests (header.payload.signature shape).
+  '''eyJhbGciOiJIUzI1NiIs[A-Za-z0-9_\-\.]+''',
+  # Auth0 public identifiers — safe by design in an SPA.
+  # SPA Client IDs ship in the browser bundle (PKCE flow, no client_secret
+  # client-side). Flagged by generic-api-key rule (entropy 4.56, 24 chars)
+  # on docs/api/auth0-current-tenant-state.md line 138. Same allowlist
+  # mirrored on UI repo's .gitleaks.toml (commit dac848b on UI).
+  # A real leak (JWT, Auth0 Management API key) still fires.
+  '''AUTH0_DOMAIN''',
+  '''AUTH0_CLIENT_ID''',
+  '''AUTH0_AUDIENCE''',
+  # Specific dev-tenant literal values (narrow — swap these if tenant rotates):
+  '''dev-ksxj46zlkhk2gcvo\.us\.auth0\.com''',
+  '''DZKCwZ9dqAk3dOtVdDfc2rLJOenxidX6''',
+]

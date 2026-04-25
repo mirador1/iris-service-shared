@@ -1,0 +1,142 @@
+# OTEL Collector config — mounted over the default config in the LGTM container.
+# Traces go to Tempo (via the local otlphttp/traces exporter).
+# Jaeger and Zipkin have been removed — Tempo is the single tracing backend.
+
+receivers:
+  otlp:
+    protocols:
+      grpc:
+        endpoint: 0.0.0.0:4317
+      http:
+        endpoint: 0.0.0.0:4318
+        cors:
+          allowed_origins:
+            - http://*
+  prometheus/collector:
+    config:
+      scrape_configs:
+        - job_name: "opentelemetry-collector"
+          scrape_interval: 1s
+          static_configs:
+            - targets: ["127.0.0.1:8888"]
+        # Scrape the Spring Boot app — replaces the standalone Prometheus container.
+        # host.docker.internal resolves to the Docker host (host-gateway alias set in compose).
+        - job_name: "spring-boot"
+          scrape_interval: 15s
+          metrics_path: /actuator/prometheus
+          static_configs:
+            - targets: ["host.docker.internal:8080"]
+
+extensions:
+  health_check:
+    endpoint: 0.0.0.0:13133
+    path: "/ready"
+
+processors:
+  batch:
+
+exporters:
+  otlphttp/metrics:
+    endpoint: http://127.0.0.1:9090/api/v1/otlp
+    tls:
+      insecure: true
+  otlphttp/traces:
+    endpoint: http://127.0.0.1:4418
+    tls:
+      insecure: true
+  otlphttp/logs:
+    endpoint: http://127.0.0.1:3100/otlp
+    tls:
+      insecure: true
+  otlp/profiles:
+    endpoint: http://127.0.0.1:4040
+    tls:
+      insecure: true
+
+  # ── 2e OTLP sink — GitLab Observability (ADR-0054) ────────────────────────
+  # Dual-export to the GitLab group's Observability endpoint so traces/metrics/
+  # logs are visible directly in GitLab's UI (no Grafana/Tempo needed locally).
+  #
+  # Enabled 2026-04-23 on mirador1 group (group-id 130289716). Beta /
+  # experimental / free during beta period per GitLab's own UI. Endpoint
+  # uses TLS HTTPS on port 14318 (OTLP over HTTP).
+  #
+  # The group-id 130289716 is visible in the GitLab UI to any group member
+  # and in the repo via this config ; not treated as secret. Forks should
+  # either override via $GITLAB_OBSERVABILITY_ENDPOINT or remove the
+  # `otlphttp/*-gitlab` entries from `service.pipelines.*.exporters` below.
+  #
+  # No auth token needed in beta : the group-id embedded in the subdomain
+  # is the identifier. If/when GA adds token auth, add a `headers:
+  # Authorization: Bearer ${env:GITLAB_OBSERVABILITY_TOKEN}` block.
+  #
+  # The otlphttp exporter auto-appends `/v1/{traces,metrics,logs}` to the
+  # endpoint based on pipeline signal — don't include it in the URL.
+  otlphttp/traces-gitlab:
+    endpoint: ${env:GITLAB_OBSERVABILITY_ENDPOINT:-https://130289716.otel.gitlab-o11y.com:14318}
+    tls:
+      insecure: false
+  otlphttp/metrics-gitlab:
+    endpoint: ${env:GITLAB_OBSERVABILITY_ENDPOINT:-https://130289716.otel.gitlab-o11y.com:14318}
+    tls:
+      insecure: false
+  otlphttp/logs-gitlab:
+    endpoint: ${env:GITLAB_OBSERVABILITY_ENDPOINT:-https://130289716.otel.gitlab-o11y.com:14318}
+    tls:
+      insecure: false
+
+  # ── 3e OTLP sink — Grafana Cloud AI Observability (POC, ADR-0059) ─────────
+  # Opt-in : only exports when GRAFANA_CLOUD_OTLP_TOKEN is set. Default
+  # value is a harmless placeholder — the Basic auth will 401 silently,
+  # which is fine because the pipeline entry below stays inactive when
+  # the token env var is unset.
+  #
+  # Grafana Cloud free tier : https://grafana.com/products/cloud/ — sign
+  # up, create an instance (any region), then Generate Auth Token for
+  # OTel. The token is paired with an instance-ID, base64-encoded as
+  # "instanceId:token" → set as GRAFANA_CLOUD_OTLP_TOKEN env var.
+  #
+  # Endpoint format (per Grafana docs) :
+  #   https://otlp-gateway-prod-<region>.grafana.net/otlp
+  # Region chosen at signup (us-central-0, eu-west-0, etc.). Default
+  # below points to eu-west-0 — override via GRAFANA_CLOUD_OTLP_ENDPOINT.
+  #
+  # AI Observability specifically requires the `gen_ai.*` semantic
+  # conventions in trace attributes — Spring AI 1.1+ Micrometer
+  # observations emit them automatically (spring.ai.chat.client.*).
+  # Grafana Cloud picks up the AI flavour of the trace when those
+  # attributes are present + builds the AI dashboards automatically.
+  otlphttp/traces-grafana-cloud:
+    endpoint: ${env:GRAFANA_CLOUD_OTLP_ENDPOINT:-https://otlp-gateway-prod-eu-west-0.grafana.net/otlp}
+    headers:
+      authorization: Basic ${env:GRAFANA_CLOUD_OTLP_TOKEN:-Zm9vOmJhcg==}
+    tls:
+      insecure: false
+
+service:
+  extensions: [health_check]
+  pipelines:
+    traces:
+      receivers: [otlp]
+      processors: [batch]
+      # Triple-export : local LGTM (primary) + GitLab Observability (shared)
+      # + Grafana Cloud AI Observability (POC, opt-in via env, ADR-0059).
+      # The grafana-cloud exporter uses a placeholder Basic-auth token when
+      # GRAFANA_CLOUD_OTLP_TOKEN is unset ; the 401 silently fails per-batch
+      # without disturbing the other two exporters. Remove the entry from
+      # the list below if you want a truly zero-network-chatter setup.
+      exporters:
+        - otlphttp/traces
+        - otlphttp/traces-gitlab
+        - otlphttp/traces-grafana-cloud
+    metrics:
+      receivers: [otlp, prometheus/collector]
+      processors: [batch]
+      exporters: [otlphttp/metrics, otlphttp/metrics-gitlab]
+    logs:
+      receivers: [otlp]
+      processors: [batch]
+      exporters: [otlphttp/logs, otlphttp/logs-gitlab]
+    profiles:
+      receivers: [otlp]
+      exporters: [otlp/profiles]

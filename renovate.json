@@ -1,0 +1,148 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "extends": [
+    "config:recommended",
+    ":semanticCommits",
+    ":semanticCommitTypeAll(chore)",
+    ":separateMajorReleases",
+    ":prImmediately",
+    ":enableVulnerabilityAlertsWithLabel(security)",
+    "schedule:weekends"
+  ],
+  "timezone": "Europe/Paris",
+  "description": [
+    "Mirador service — automated dependency updates.",
+    "Strategy: keep the repo on current stable versions without human chasing.",
+    "Minor/patch updates auto-merge when CI is green. Majors always require",
+    "human review (see ADR-0006 — centralised versions in pom.xml properties).",
+    "Runs on weekends to minimise weekday noise."
+  ],
+  "labels": ["dependencies", "renovate"],
+  "assigneesFromCodeOwners": true,
+  "reviewersFromCodeOwners": true,
+  "platformAutomerge": true,
+  "rebaseWhen": "conflicted",
+  "prHourlyLimit": 4,
+  "prConcurrentLimit": 10,
+  "packageRules": [
+    {
+      "description": "Auto-merge patch + minor updates after CI green. Majors need human review.",
+      "matchUpdateTypes": ["patch", "pin", "digest"],
+      "automerge": true,
+      "automergeType": "pr",
+      "platformAutomerge": true
+    },
+    {
+      "description": "Auto-merge minor updates for well-behaved ecosystems (Maven plugins, dev-only npm).",
+      "matchUpdateTypes": ["minor"],
+      "matchDepTypes": ["build", "dev", "plugin"],
+      "automerge": true,
+      "platformAutomerge": true
+    },
+    {
+      "description": "Group all Spring Boot artifacts — they must upgrade together.",
+      "groupName": "Spring Boot",
+      "separateMinorPatch": true,
+      "matchPackageNames": ["/^org\\.springframework\\.boot:/"]
+    },
+    {
+      "description": "Group all Micrometer / OTel artifacts — transitive compatibility.",
+      "groupName": "Micrometer / OpenTelemetry",
+      "separateMinorPatch": true,
+      "matchPackageNames": [
+        "/^io\\.micrometer:/",
+        "/^io\\.opentelemetry:/",
+        "/^io\\.opentelemetry\\.instrumentation:/"
+      ]
+    },
+    {
+      "description": "Group Testcontainers modules.",
+      "groupName": "Testcontainers",
+      "matchPackageNames": ["/^org\\.testcontainers:/"]
+    },
+    {
+      "description": "Group Argo CD + Argo Rollouts charts / images — must upgrade together or controller versions drift from the CRDs they install.",
+      "groupName": "Argo (CD + Rollouts)",
+      "matchPackageNames": [
+        "/argoproj/argocd/",
+        "/argoproj/argo-rollouts/",
+        "/argocd/",
+        "/argo-rollouts/"
+      ]
+    },
+    {
+      "description": "Group External Secrets Operator — helm chart + CRDs + image must match; the CI CRD bundle in scripts/ci-k8s-test.sh is pinned to the same version.",
+      "groupName": "External Secrets Operator",
+      "matchPackageNames": [
+        "/external-secrets/external-secrets/",
+        "/external-secrets/"
+      ]
+    },
+    {
+      "description": "Group Chaos Mesh — CRDs + image + helm chart. Same rationale as ESO: scripts/ci-k8s-test.sh pins CRD version.",
+      "groupName": "Chaos Mesh",
+      "matchPackageNames": [
+        "/chaos-mesh/chaos-mesh/",
+        "/chaos-mesh/"
+      ]
+    },
+    {
+      "description": "Group Grafana LGTM stack components — Grafana/Tempo/Loki/Mimir/Pyroscope share release trains.",
+      "groupName": "Grafana LGTM",
+      "matchPackageNames": [
+        "/grafana/grafana/",
+        "/grafana/tempo/",
+        "/grafana/loki/",
+        "/grafana/mimir/",
+        "/grafana/pyroscope/",
+        "/grafana/otel-lgtm/"
+      ]
+    },
+    {
+      "description": "Group Kyverno chart + image so a policy engine bump lands atomically.",
+      "groupName": "Kyverno",
+      "matchPackageNames": ["/kyverno/kyverno/", "/kyverno/"]
+    },
+    {
+      "description": "Group cert-manager chart + image — CRDs + controller must version-match.",
+      "groupName": "cert-manager",
+      "matchPackageNames": ["/cert-manager/cert-manager/", "/jetstack/cert-manager/"]
+    },
+    {
+      "description": "Group all Maven plugin versions (properties ending .plugin.version) so a weekly sweep doesn't flood the MR board.",
+      "matchFileNames": ["pom.xml"],
+      "matchDepTypes": ["build"],
+      "groupName": "Maven plugins"
+    },
+    {
+      "description": "Keep Java LTS — Java 25 is non-LTS; 21 is LTS. Alert on major bumps.",
+      "matchPackageNames": ["java"],
+      "matchUpdateTypes": ["major"],
+      "labels": ["major-upgrade", "manual-review"],
+      "automerge": false
+    },
+    {
+      "description": "Docker base images — pin by digest for reproducibility, but still upgrade.",
+      "matchDatasources": ["docker"],
+      "pinDigests": true
+    },
+    {
+      "description": "Never auto-merge SNAPSHOT dependencies.",
+      "matchCurrentVersion": "/SNAPSHOT$/",
+      "enabled": false,
+      "matchPackageNames": ["/.*/"]
+    }
+  ],
+  "gitlabci": {
+    "description": "Keep .gitlab-ci.yml image tags current (e.g. maven:X-eclipse-temurin-25-noble)."
+  },
+  "vulnerabilityAlerts": {
+    "labels": ["security", "priority-high"],
+    "automerge": false,
+    "schedule": ["at any time"]
+  },
+  "lockFileMaintenance": {
+    "enabled": true,
+    "schedule": ["before 5am on monday"]
+  }
+}

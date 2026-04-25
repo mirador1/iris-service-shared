@@ -1,0 +1,163 @@
+# =============================================================================
+# docker-compose.observability.yml — Observability stack
+#
+# Run with: docker compose -f docker-compose.observability.yml up -d
+#
+# Services:
+#
+# LGTM all-in-one (Grafana + Loki + Tempo + Mimir + Pyroscope)  [port 3000]
+#   grafana/otel-lgtm bundles the full observability backend in one container.
+#   Spring Boot sends traces and logs via OTLP (port 4318).
+#   The OTel Collector inside LGTM scrapes /actuator/prometheus every 15s → Mimir.
+#   Mimir Prometheus-compatible query API exposed at http://localhost:9091
+#   Grafana: http://localhost:3000
+#
+# cors-proxy — Nginx proxy adding CORS headers to Loki (:3100) and Docker API (:2375)
+# docker-proxy — read-only Docker Engine API for container status in the Angular UI
+# =============================================================================
+
+services:
+
+  # ---------------------------------------------------------------------------
+  # LGTM — Loki + Grafana + Tempo + Mimir + Pyroscope (all-in-one)
+  #
+  # This all-in-one container from Grafana Labs packages the entire
+  # observability backend for development/demo use.
+  #
+  # Ports:
+  #   3000: Grafana UI
+  #   4317: OTLP gRPC (traces, logs, metrics push)
+  #   4318: OTLP HTTP — Spring Boot sends traces and logs here
+  #   3200: Tempo HTTP query API — direct trace lookup by ID
+  #   9091→9090: Mimir Prometheus-compatible query API (replaces standalone Prometheus)
+  #
+  # The OTel Collector inside this container scrapes /actuator/prometheus every 15s
+  # (spring-boot job in otelcol-override.yaml) and stores metrics in Mimir.
+  # extra_hosts maps host.docker.internal → host-gateway so the OTel Collector
+  # can reach the Spring Boot app running outside Docker.
+  # ---------------------------------------------------------------------------
+  lgtm:
+    # observability profile: activated when layering this file on top of
+    # docker-compose.yml with `--profile observability`. Kept as the
+    # default profile too (no `profiles:` = always-on) was NOT chosen —
+    # explicit profile means `docker compose -f observability.yml up` by
+    # itself is a no-op, matching the single-purpose intent of this file.
+    profiles: ["observability"]
+    # Pinned tag. Bumping from 0.22.1 (Loki 3.6.7 / Grafana 12.4.1 /
+    # Tempo 2.10.3 / Prom 3.10.0) to 0.25.0 (Loki 3.7.1 / Grafana 12.4.2
+    # / Tempo 2.10.4 / Prom 3.11.2) unlocks Loki bloom-filter support
+    # and Grafana 12.4's Logs Drilldown polish. See ADR-0012.
+    image: grafana/otel-lgtm:0.25.0
+    container_name: customerservice-lgtm
+    ports:
+      - "3000:3000"    # Grafana UI
+      # Loki API (3100) is NOT exposed directly — routed through the CORS proxy instead.
+      # The cors-proxy service listens on host port 3100 and forwards to lgtm:3100
+      # with Access-Control-Allow-Origin headers for the Angular UI.
+      - "4317:4317"    # OTLP gRPC
+      - "4318:4318"    # OTLP HTTP — Spring Boot sends traces and logs here
+      - "3200:3200"    # Tempo HTTP query API — direct trace lookup by ID
+      - "9091:9090"    # Mimir query API (Prometheus-compatible) — replaces standalone Prometheus
+    extra_hosts:
+      # Allows the OTel Collector inside this container to scrape the Spring Boot app
+      # running on the host machine (outside Docker) via a stable hostname.
+      - "host.docker.internal:host-gateway"
+    volumes:
+      # Dashboard provisioning — the entire dashboards-lgtm/ directory is mounted so
+      # adding a new *.json file is enough to provision a new Grafana dashboard without
+      # any container restart. The YAML provider scans the directory every 10 s.
+      - ../../infra/observability/grafana/dashboards-lgtm/dashboard-demo-lgtm.yaml:/otel-lgtm/grafana/conf/provisioning/dashboards/dashboard-demo-lgtm.yaml
+      - ../../infra/observability/grafana/dashboards-lgtm/:/otel-lgtm/dashboards/
+      # Override OTEL collector config (Tempo-only pipeline, CORS allowed)
+      - ../../infra/observability/otelcol-override.yaml:/otel-lgtm/otelcol-config.yaml:ro
+      # Override Loki config to enable bloom filters (ADR-0012). The
+      # baseline file ships no bloom sections so blooms are off by default.
+      - ../../infra/observability/loki-override.yaml:/otel-lgtm/loki-config.yaml:ro
+      # Override Grafana datasource provisioning — fixes Tempo→Loki trace-to-logs query:
+      # trace_id is a Loki stream label so the lookup must use {trace_id="<id>"},
+      # not the default line-filter syntax (| trace_id = "<id>") shipped by otel-lgtm.
+      - ../../infra/observability/grafana/provisioning/datasources.yaml:/otel-lgtm/grafana/conf/provisioning/datasources/grafana-datasources.yaml:ro
+    environment:
+      # Forward all application logs received via OTLP to Loki
+      ENABLE_LOGS_ALL: "true"
+      # Set the provisioned demo dashboard as the Grafana home page
+      GF_DASHBOARDS_DEFAULT_HOME_DASHBOARD_PATH: /otel-lgtm/dashboards/demo.json
+      # Install the Infinity datasource plugin at startup so Grafana panels can call
+      # REST endpoints (e.g. /actuator/health/*) directly — needed for exact UP/DOWN
+      # health probe status that is not available as a Prometheus/OTLP metric.
+      # Plugins installed at startup:
+      # - yesoreyeram-infinity-datasource: call REST endpoints (actuator health probes)
+      # - marcusolsson-dynamictext-panel:  rich HTML+JS panels (Docker service control)
+      # Note — `volkovlabs-button-panel` dropped because Grafana's plugin
+      # registry began returning 404 for the unversioned name in 2026-04,
+      # which crashed the whole Grafana process on startup (dependent
+      # services failed to initialise, no HTTP on :3000). If we want
+      # single-action buttons back, install explicitly via
+      # `GF_INSTALL_PLUGINS: ...,volkovlabs-form-panel@<pinned-version>` —
+      # the form-panel variant is still published.
+      GF_INSTALL_PLUGINS: "yesoreyeram-infinity-datasource,marcusolsson-dynamictext-panel"
+    # Wait until Tempo's query API is ready before Grafana attempts datasource connection.
+    # Tempo exposes /ready at port 3200; LGTM takes ~15-20s to start all internal services.
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q -O - http://localhost:3200/ready || exit 1"]
+      interval: 10s
+      timeout: 5s
+      retries: 15
+      start_period: 30s
+
+  # ---------------------------------------------------------------------------
+  # Nginx CORS proxy for Loki
+  #
+  # The Angular UI on localhost:4200 needs to call Loki (3100) directly.
+  # Loki does not support CORS natively, so this Nginx sidecar adds the
+  # required Access-Control-Allow-Origin headers.
+  #
+  # The proxy listens on port 3100 (same as Loki's native port) so the
+  # frontend can call http://localhost:3100/loki/api/v1/query_range without
+  # any port mapping changes. The LGTM container does NOT expose port 3100
+  # to the host — only this proxy does.
+  # ---------------------------------------------------------------------------
+  cors-proxy:
+    # observability profile: only useful alongside lgtm + docker-proxy.
+    profiles: ["observability"]
+    image: nginx:1.27-alpine
+    container_name: customerservice-cors-proxy
+    ports:
+      - "3100:3100"    # Loki CORS proxy
+      - "2375:2375"    # Docker API CORS proxy
+      - "4319:4319"    # OTLP HTTP CORS proxy (browser telemetry — ADR-0009)
+    volumes:
+      - ../../infra/observability/cors-proxy.conf:/etc/nginx/conf.d/default.conf:ro
+    depends_on:
+      lgtm:
+        condition: service_healthy   # Loki runs inside LGTM — don't proxy before Loki is ready
+      docker-proxy:
+        condition: service_started
+    restart: unless-stopped
+
+  # ---------------------------------------------------------------------------
+  # Docker Socket Proxy — secure, filtered Docker API for the Angular UI
+  #
+  # Exposes a read-only subset of the Docker Engine API over TCP (port 2376).
+  # Only container operations are allowed — no image pull, no exec, no volumes.
+  # The Angular UI calls this via the CORS Nginx proxy at http://localhost:2375.
+  #
+  # This keeps the backend agnostic — no Docker code in Spring Boot.
+  # ---------------------------------------------------------------------------
+  docker-proxy:
+    # observability profile: read-only Docker Engine API proxy, consumed
+    # by the Angular Observability page (container start/stop/status).
+    profiles: ["observability"]
+    image: tecnativa/docker-socket-proxy:latest  # 0.4.2 tag was removed from Docker Hub
+    container_name: customerservice-docker-proxy
+    environment:
+      CONTAINERS: 1      # allow /containers/* (list, inspect, start, stop, restart)
+      POST: 1            # allow POST (start/stop/restart are POST)
+      IMAGES: 0
+      VOLUMES: 0
+      NETWORKS: 0
+      EXEC: 0
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+    restart: unless-stopped
+
