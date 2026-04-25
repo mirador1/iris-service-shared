@@ -32,7 +32,7 @@
     <string>-c</string>
     <!-- Runs from the svc repo root so REPO_ROOT resolves correctly.
          Sources the user's profile (-l) so OVH_* env vars are picked up. -->
-    <string>cd /Users/benoitbesson/dev/workspace-modern/mirador-service &amp;&amp; bin/budget/ovh-alert.sh --quiet</string>
+    <string>cd /Users/benoitbesson/dev/workspace-modern/mirador-service-java &amp;&amp; bin/budget/ovh-alert.sh --quiet</string>
   </array>
 
   <key>StartCalendarInterval</key>
