@@ -1,0 +1,86 @@
+# Cross-cutting ADRs — `mirador-service-shared`
+
+This directory captures the **why** of every architectural choice that
+binds **two or more** of the mirador1 repos
+([java](https://gitlab.com/mirador1/mirador-service-java) ·
+[python](https://gitlab.com/mirador1/mirador-service-python) ·
+[ui](https://gitlab.com/mirador1/mirador-ui) · this `shared` repo).
+Format follows
+[Michael Nygard's lightweight ADR template](https://cognitect.com/blog/2011/11/15/documenting-architecture-decisions).
+
+For **repo-local decisions** (Spring Boot stack choice, FastAPI auth
+scheme, Angular zoneless mode), see each consumer repo's own
+`docs/adr/` :
+- [`mirador-service-java/docs/adr/`](https://gitlab.com/mirador1/mirador-service-java/-/tree/main/docs/adr)
+- [`mirador-service-python/docs/adr/`](https://gitlab.com/mirador1/mirador-service-python/-/tree/main/docs/adr)
+- [`mirador-ui/docs/adr/`](https://gitlab.com/mirador1/mirador-ui/-/tree/main/docs/adr)
+
+## Status snapshot
+
+- ✨ **Accepted** : current architectural shape ; obey unless an ADR
+  supersedes.
+- 📝 **Proposed** : draft, awaiting review or implementation.
+- 🛑 **Superseded** : kept for historical context ; the link points to
+  the replacement.
+- 🚧 **Experimental** : in-progress trial ; may flip to Accepted or
+  Superseded based on outcome.
+
+## Hierarchical index
+
+| Theme | ADRs |
+|---|---|
+| **Polyrepo & sharing** | 0001 shared repo via submodule, 0057 polyrepo vs monorepo |
+| **Observability** | 0010 OTLP push to collector, 0039 two observability deployment modes, 0054 GitLab observability dual-export, 0058 SLO/SLA via Sloth |
+| **Security & secrets** | 0016 External Secrets Operator |
+| **Cost discipline** | 0021 cost-deferred industrial patterns |
+| **Multi-cloud** | 0036 multi-cloud Terraform posture |
+| **Release engineering** | 0055 shell-based release automation, 0059 Renovate base preset |
+
+## Flat index
+
+The table below is **auto-regenerated** by
+[`bin/dev/regen-adr-index.sh`](../../bin/dev/regen-adr-index.sh).
+Do not edit between the markers — run the script after adding /
+modifying an ADR (consumer repos' `stability-check.sh` preflight
+catches drift on their bundled copy).
+
+<!-- ADR-INDEX:START -->
+| ID | Status | Title |
+|---|---|---|
+| 0001 | Accepted | [Shared infra extraction via git submodule](0001-shared-repo-via-submodule.md) |
+| 0010 | Accepted | [OpenTelemetry OTLP push to a Collector (not Prometheus scrape)](0010-otlp-push-to-collector.md) |
+| 0016 | Accepted | [External Secrets Operator + Google Secret Manager](0016-external-secrets-operator.md) |
+| 0021 | Accepted | [Cost-deferred industrial patterns](0021-cost-deferred-industrial-patterns.md) |
+| 0036 | Accepted | [Multi-cloud Terraform posture](0036-multi-cloud-terraform-posture.md) |
+| 0039 | Accepted | [Two observability deployment modes (OTel-native vs Prometheus-community)](0039-two-observability-deployment-modes.md) |
+| 0054 | Active | [Dual-export OTLP telemetry to GitLab Observability](0054-gitlab-observability-dual-export.md) |
+| 0055 | Accepted | [Shell-based release automation (no semantic-release)](0055-shell-based-release-automation.md) |
+| 0057 | Accepted | [Conserver le polyrepo (svc + UI séparés), pas de migration vers monorepo](0057-polyrepo-vs-monorepo.md) |
+| 0058 | Accepted | [SLO/SLA defined as code via Sloth](0058-slo-sla-with-sloth.md) |
+| 0059 | Accepted | [Renovate base preset + sync script (option B)](0059-renovate-base-preset.md) |
+<!-- ADR-INDEX:END -->
+
+## Adding a new cross-cutting ADR
+
+1. **Verify it's truly cross-cutting** — if the decision only affects 1
+   repo, it belongs in that repo's `docs/adr/`, not here. Litmus test :
+   "could the other 3 repos ignore this entirely?" → yes = repo-local.
+2. Pick the next 4-digit ID (look at existing files ; numbering is
+   deliberately sparse to leave room for retroactive insertions).
+3. File name : `NNNN-<kebab-case-title>.md` (e.g. `0060-otel-collector-tail-sampling.md`).
+4. First line of the file : `# ADR-NNNN — <Title>` or `# ADR-NNNN : <Title>`.
+5. Include a `**Status** : <Proposed|Accepted|Superseded|Experimental>`
+   line near the top so the index regenerator picks it up.
+6. Run `bin/dev/regen-adr-index.sh --in-place` to refresh this README's
+   flat-index table.
+7. Commit the ADR + the regenerated README in the same commit on `main`
+   (shared works directly on main per the submodule pattern, no dev
+   branch).
+8. Bump the submodule SHA in each consumer repo that's affected.
+
+## See also
+
+- [`../../bin/dev/regen-adr-index.sh`](../../bin/dev/regen-adr-index.sh) — regenerator
+- [`../../bin/ship/pre-sync.sh`](../../bin/ship/pre-sync.sh) — git safety pre-flight
+- [`../../README.md`](../../README.md) — shared repo overview + how to update
+- Consumer ADR dirs : [java](https://gitlab.com/mirador1/mirador-service-java/-/tree/main/docs/adr) · [python](https://gitlab.com/mirador1/mirador-service-python/-/tree/main/docs/adr) · [ui](https://gitlab.com/mirador1/mirador-ui/-/tree/main/docs/adr)

@@ -1,11 +1,21 @@
 #!/usr/bin/env bash
 # =============================================================================
-# bin/ship/changelog.sh — auto-update CHANGELOG.md from Conventional Commits
-# since the last `stable-v*` tag.
+# bin/ship/changelog.sh — auto-update CHANGELOG.md from Conventional Commits.
+#
+# Universal version usable from any mirador1 repo (java / python / ui /
+# shared). Each consumer passes its own tag prefix via `--tag-prefix` so
+# the script reads the right tag space :
+#
+#   Java   : --tag-prefix stable-v       (stable-v1.2.3)
+#   Python : --tag-prefix stable-py-v    (stable-py-v0.7.0)
+#   UI     : --tag-prefix stable-v       (stable-v1.0.5)
+#   Shared : --tag-prefix shared-v       (shared-v0.1.0 — if ever tagged)
+#
+# Default is `stable-v` to preserve historical Java behaviour for
+# zero-arg invocations.
 #
 # Replacement for release-please (which was GitHub-API-only and failed on
-# GitLab — see TASKS.md "Release automation — tool swap"). Hand-rolled
-# bash, no external deps beyond `git`.
+# GitLab — see ADR-0055). Hand-rolled bash, no external deps beyond `git`.
 #
 # Categorisation follows the same convention as release-please :
 #   feat:     → ✨ Features
@@ -23,30 +33,37 @@
 # Breaking changes (BREAKING CHANGE: ... in commit body OR feat!: prefix)
 # get a 💥 prefix on the line.
 #
-# Usage:
-#   bin/ship/changelog.sh                 # writes to CHANGELOG.md (creates if absent)
-#   bin/ship/changelog.sh --since v1.0.30 # custom range start
-#   bin/ship/changelog.sh --include-chore # include chore/ci/build/style sections
-#   bin/ship/changelog.sh --dry-run       # print to stdout, don't write
+# Usage :
+#   bin/ship/changelog.sh                            # default tag-prefix=stable-v, writes to CHANGELOG.md
+#   bin/ship/changelog.sh --tag-prefix stable-py-v   # Python repo
+#   bin/ship/changelog.sh --since v1.0.30            # custom range start
+#   bin/ship/changelog.sh --include-chore            # include chore/ci/build/style sections
+#   bin/ship/changelog.sh --dry-run                  # print to stdout, don't write
+#
+# Used as : infra/shared/bin/ship/changelog.sh --tag-prefix stable-py-v
+# (consumer repos call it via the submodule path).
 #
 # After updating CHANGELOG.md :
 #   git add CHANGELOG.md && git commit -m "chore(changelog): bump for vX.Y.Z"
-#   git tag -a stable-vX.Y.Z -m "..."
-#   git push origin stable-vX.Y.Z
-#   bin/ship/gitlab-release.sh stable-vX.Y.Z
+#   git tag -a <tag-prefix><X.Y.Z> -m "..."
+#   git push origin <tag-prefix><X.Y.Z>
+#   bin/ship/gitlab-release.sh <tag-prefix><X.Y.Z>
 # =============================================================================
 set -euo pipefail
 
 INCLUDE_CHORE=0
 DRY_RUN=0
 SINCE=""
+TAG_PREFIX="stable-v"
 
 while [ $# -gt 0 ]; do
   case "$1" in
-    --include-chore) INCLUDE_CHORE=1 ; shift ;;
-    --dry-run)       DRY_RUN=1 ; shift ;;
-    --since)         SINCE="$2" ; shift 2 ;;
-    --since=*)       SINCE="${1#--since=}" ; shift ;;
+    --include-chore)   INCLUDE_CHORE=1 ; shift ;;
+    --dry-run)         DRY_RUN=1 ; shift ;;
+    --since)           SINCE="$2" ; shift 2 ;;
+    --since=*)         SINCE="${1#--since=}" ; shift ;;
+    --tag-prefix)      TAG_PREFIX="$2" ; shift 2 ;;
+    --tag-prefix=*)    TAG_PREFIX="${1#--tag-prefix=}" ; shift ;;
     --help|-h)
       sed -n '2,40p' "$0"
       exit 0
@@ -58,11 +75,11 @@ while [ $# -gt 0 ]; do
   esac
 done
 
-# Default range : since the latest stable-v* tag.
+# Default range : since the latest <tag-prefix>* tag.
 if [ -z "$SINCE" ]; then
-  SINCE=$(git tag -l "stable-v*" | sort -V | tail -1)
+  SINCE=$(git tag -l "${TAG_PREFIX}*" | sort -V | tail -1)
   if [ -z "$SINCE" ]; then
-    echo "❌ No stable-v* tag found ; pass --since <ref>" >&2
+    echo "❌ No ${TAG_PREFIX}* tag found ; pass --since <ref>" >&2
     exit 1
   fi
 fi

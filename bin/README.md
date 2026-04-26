@@ -38,6 +38,7 @@ Day-to-day developer aid. All scripts have `--help` / dry-run modes.
 | [`stability-check.sh`](dev/stability-check.sh) | Multi-section preflight before tagging stable-vX.Y.Z (lint + test + build + sec-scan). | Manual / cron |
 | [`runner-healthcheck.sh`](dev/runner-healthcheck.sh) | Verify Docker `gitlab-runner` container is up + group runner is online from GitLab. Auto-restart on failure. | launchd every 5 min |
 | [`burn-slo-budget.sh`](dev/burn-slo-budget.sh) | Controlled SLO budget burn for live demo (chaos requests + Grafana annotations). | Manual / demo |
+| [`regen-adr-index.sh`](dev/regen-adr-index.sh) | Regenerate `docs/adr/README.md` flat-index table from ADR files. Universal (used by all 4 repos via the submodule). `--check` mode for CI drift detection. | Manual + per-repo `stability-check.sh` |
 
 ## `launchd/` — macOS launchd plists
 
@@ -50,11 +51,14 @@ Cron-equivalent on macOS. Install with `launchctl load -w ~/Library/LaunchAgents
 
 ## `ship/` — Release engineering
 
-Release + governance automation.
+Release + governance automation. **All 4 scripts are language-agnostic** — Java
++ Python + UI consumers call them via `infra/shared/bin/ship/...` rather than
+duplicating per-repo (see [factoring rationale](../docs/adr/0001-shared-repo-via-submodule.md)).
 
 | Script | Purpose | Wired to |
 |---|---|---|
-| [`changelog.sh`](ship/changelog.sh) | Generate CHANGELOG.md entry from commits since last `stable-v*` tag (Conventional Commits). | Manual pre-tag |
+| [`pre-sync.sh`](ship/pre-sync.sh) | Git-safety pre-flight before `git reset --hard` : checks uncommitted, untracked, unpushed commits, stash entries. Returns exit 0 if safe to reset. Universal (operates on caller's git state, not shared's). | Manual before any destructive sync |
+| [`changelog.sh`](ship/changelog.sh) | Generate CHANGELOG.md entry from commits since last `<tag-prefix>*` tag (Conventional Commits). Universal — pass `--tag-prefix stable-py-v` for Python, default is `stable-v`. | Manual pre-tag |
 | [`gitlab-release.sh`](ship/gitlab-release.sh) | Create GitLab Release object linked to a tag, with rendered changelog body. | Manual post-tag |
 | [`check-default-branch.sh`](ship/check-default-branch.sh) | Verifies all 4 mirador1 projects have `default_branch=main` (after the 2026-04-25 incident). | Manual / pre-tag |
 | [`renovate-sync.sh`](ship/renovate-sync.sh) | Sync `renovate.json` across 4 repos from `renovate-base.json` (per [ADR-0059](../docs/adr/0059-renovate-base-preset.md)). | Manual after editing renovate-base.json |
