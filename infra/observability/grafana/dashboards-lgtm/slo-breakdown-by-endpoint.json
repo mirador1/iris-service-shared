@@ -1,0 +1,162 @@
+{
+  "annotations": {"list": []},
+  "editable": true,
+  "fiscalYearStartMonth": 0,
+  "graphTooltip": 1,
+  "id": null,
+  "links": [
+    {
+      "asDropdown": false,
+      "icon": "external link",
+      "targetBlank": true,
+      "title": "← back to SLO Overview",
+      "type": "link",
+      "url": "/d/mirador-slo-overview/slo-overview-mirador"
+    }
+  ],
+  "panels": [
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "description": "Top 10 endpoints by 5xx error rate. Identifies which endpoint is dragging the availability SLO.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "thresholds"},
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"color": "green", "value": null},
+              {"color": "yellow", "value": 0.001},
+              {"color": "red", "value": 0.01}
+            ]
+          },
+          "unit": "percentunit"
+        }
+      },
+      "gridPos": {"h": 8, "w": 24, "x": 0, "y": 0},
+      "id": 1,
+      "options": {
+        "legend": {"calcs": ["lastNotNull", "mean", "max"], "displayMode": "table", "placement": "right"},
+        "tooltip": {"mode": "multi", "sort": "desc"}
+      },
+      "pluginVersion": "11.0.0",
+      "targets": [
+        {
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "expr": "topk(10,\n  sum by (uri) (rate(http_server_requests_seconds_count{job=\"mirador-service\",status=~\"5..\"}[5m]))\n  /\n  sum by (uri) (rate(http_server_requests_seconds_count{job=\"mirador-service\"}[5m]))\n)",
+          "legendFormat": "{{ uri }}",
+          "refId": "A"
+        }
+      ],
+      "title": "Top 10 endpoints — 5xx error ratio (5m)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "description": "Top 10 endpoints by p99 latency. Identifies which endpoint is dragging the latency SLO.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"color": "green", "value": null},
+              {"color": "yellow", "value": 0.5},
+              {"color": "red", "value": 1.0}
+            ]
+          },
+          "unit": "s"
+        }
+      },
+      "gridPos": {"h": 8, "w": 24, "x": 0, "y": 8},
+      "id": 2,
+      "options": {
+        "legend": {"calcs": ["lastNotNull", "mean", "max"], "displayMode": "table", "placement": "right"},
+        "tooltip": {"mode": "multi", "sort": "desc"}
+      },
+      "pluginVersion": "11.0.0",
+      "targets": [
+        {
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "expr": "topk(10,\n  histogram_quantile(0.99,\n    sum by (uri, le) (rate(http_server_requests_seconds_bucket{job=\"mirador-service\"}[5m]))\n  )\n)",
+          "legendFormat": "{{ uri }}",
+          "refId": "A"
+        }
+      ],
+      "title": "Top 10 endpoints — p99 latency (5m)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "description": "Request rate by endpoint — context for the error/latency panels above. High-traffic endpoints contribute proportionally more to SLO budget burn.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "palette-classic"},
+          "unit": "reqps"
+        }
+      },
+      "gridPos": {"h": 8, "w": 12, "x": 0, "y": 16},
+      "id": 3,
+      "options": {
+        "legend": {"calcs": ["lastNotNull", "mean"], "displayMode": "table", "placement": "right"},
+        "tooltip": {"mode": "multi", "sort": "desc"}
+      },
+      "pluginVersion": "11.0.0",
+      "targets": [
+        {
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "expr": "topk(10, sum by (uri) (rate(http_server_requests_seconds_count{job=\"mirador-service\"}[5m])))",
+          "legendFormat": "{{ uri }}",
+          "refId": "A"
+        }
+      ],
+      "title": "Request rate by endpoint (5m)",
+      "type": "timeseries"
+    },
+    {
+      "datasource": {"type": "prometheus", "uid": "prometheus"},
+      "description": "Budget burn contribution per endpoint = (endpoint_error_rate × endpoint_request_share). The endpoint with the highest score is what to fix first.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {"mode": "thresholds"},
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {"color": "green", "value": null},
+              {"color": "yellow", "value": 0.0001},
+              {"color": "red", "value": 0.001}
+            ]
+          },
+          "unit": "percentunit"
+        }
+      },
+      "gridPos": {"h": 8, "w": 12, "x": 12, "y": 16},
+      "id": 4,
+      "options": {
+        "legend": {"calcs": ["lastNotNull", "max"], "displayMode": "table", "placement": "right"},
+        "tooltip": {"mode": "multi", "sort": "desc"}
+      },
+      "pluginVersion": "11.0.0",
+      "targets": [
+        {
+          "datasource": {"type": "prometheus", "uid": "prometheus"},
+          "expr": "topk(10,\n  sum by (uri) (rate(http_server_requests_seconds_count{job=\"mirador-service\",status=~\"5..\"}[5m]))\n  /\n  ignoring (uri) group_left sum(rate(http_server_requests_seconds_count{job=\"mirador-service\"}[5m]))\n)",
+          "legendFormat": "{{ uri }}",
+          "refId": "A"
+        }
+      ],
+      "title": "Budget burn contribution by endpoint (5m)",
+      "type": "timeseries"
+    }
+  ],
+  "preload": false,
+  "refresh": "30s",
+  "schemaVersion": 39,
+  "tags": ["slo", "mirador", "sre", "breakdown"],
+  "templating": {"list": []},
+  "time": {"from": "now-6h", "to": "now"},
+  "timepicker": {},
+  "timezone": "browser",
+  "title": "SLO Breakdown by Endpoint — Mirador",
+  "uid": "mirador-slo-breakdown-by-endpoint",
+  "version": 1
+}
