@@ -56,6 +56,7 @@ catches drift on their bundled copy).
 | 0039 | Accepted | [Two observability deployment modes (OTel-native vs Prometheus-community)](0039-two-observability-deployment-modes.md) |
 | 0054 | Active | [Dual-export OTLP telemetry to GitLab Observability](0054-gitlab-observability-dual-export.md) |
 | 0058 | Accepted | [SLO/SLA defined as code via Sloth](0058-slo-sla-with-sloth.md) |
+| 0059 | Accepted | [Customer / Order / Product / OrderLine — domain data model](0059-customer-order-product-data-model.md) |
 <!-- ADR-INDEX:END -->
 
 ## Adding a new cross-cutting ADR
