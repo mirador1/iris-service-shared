@@ -1,0 +1,58 @@
+{
+  "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "description": "Common renovate config for all mirador1 repos. Synced into each repo's renovate.json by bin/ship/renovate-sync.sh — DO NOT edit a repo's renovate.json's common fields directly, edit this file then re-run sync. Repo-specific packageRules are preserved (appended after the common rules below).",
+  "extends": [
+    "config:recommended",
+    ":semanticCommits",
+    ":semanticCommitTypeAll(chore)",
+    ":separateMajorReleases",
+    ":prImmediately",
+    ":enableVulnerabilityAlertsWithLabel(security)",
+    "schedule:weekends"
+  ],
+  "timezone": "Europe/Paris",
+  "labels": ["dependencies", "renovate"],
+  "assigneesFromCodeOwners": true,
+  "reviewersFromCodeOwners": true,
+  "platformAutomerge": true,
+  "rebaseWhen": "conflicted",
+  "prHourlyLimit": 4,
+  "prConcurrentLimit": 10,
+  "packageRules": [
+    {
+      "description": "Common rule : auto-merge patch + pin + digest after CI green. All 4 repos share this.",
+      "matchUpdateTypes": ["patch", "pin", "digest"],
+      "automerge": true,
+      "automergeType": "pr",
+      "platformAutomerge": true
+    },
+    {
+      "description": "Auto-merge minor updates for well-behaved ecosystems (Maven plugins, dev/build deps). Major bumps still need review.",
+      "matchUpdateTypes": ["minor"],
+      "matchDepTypes": ["build", "dev", "plugin"],
+      "automerge": true,
+      "platformAutomerge": true
+    },
+    {
+      "description": "Docker base images — pin by digest for reproducibility, but still upgrade.",
+      "matchDatasources": ["docker"],
+      "pinDigests": true
+    },
+    {
+      "description": "Never auto-merge SNAPSHOT dependencies (Maven snapshots, npm prerelease tags).",
+      "matchCurrentVersion": "/SNAPSHOT$/",
+      "enabled": false,
+      "matchPackageNames": ["/.*/"]
+    }
+  ],
+  "vulnerabilityAlerts": {
+    "labels": ["security", "priority-high"],
+    "automerge": false,
+    "schedule": ["at any time"]
+  },
+  "lockFileMaintenance": {
+    "description": "Refresh lockfiles weekly to pull in transitive dep patches.",
+    "enabled": true,
+    "schedule": ["before 5am on monday"]
+  }
+}

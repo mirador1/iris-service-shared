@@ -1,5 +1,12 @@
 {
   "$schema": "https://docs.renovatebot.com/renovate-schema.json",
+  "description": [
+    "Mirador service — automated dependency updates.",
+    "Strategy: keep the repo on current stable versions without human chasing.",
+    "Minor/patch updates auto-merge when CI is green. Majors always require",
+    "human review (see ADR-0006 — centralised versions in pom.xml properties).",
+    "Runs on weekends to minimise weekday noise."
+  ],
   "extends": [
     "config:recommended",
     ":semanticCommits",
@@ -10,14 +17,10 @@
     "schedule:weekends"
   ],
   "timezone": "Europe/Paris",
-  "description": [
-    "Mirador service — automated dependency updates.",
-    "Strategy: keep the repo on current stable versions without human chasing.",
-    "Minor/patch updates auto-merge when CI is green. Majors always require",
-    "human review (see ADR-0006 — centralised versions in pom.xml properties).",
-    "Runs on weekends to minimise weekday noise."
+  "labels": [
+    "dependencies",
+    "renovate"
   ],
-  "labels": ["dependencies", "renovate"],
   "assigneesFromCodeOwners": true,
   "reviewersFromCodeOwners": true,
   "platformAutomerge": true,
@@ -26,24 +29,51 @@
   "prConcurrentLimit": 10,
   "packageRules": [
     {
-      "description": "Auto-merge patch + minor updates after CI green. Majors need human review.",
-      "matchUpdateTypes": ["patch", "pin", "digest"],
+      "description": "Common rule : auto-merge patch + pin + digest after CI green. All 4 repos share this.",
+      "matchUpdateTypes": [
+        "patch",
+        "pin",
+        "digest"
+      ],
       "automerge": true,
       "automergeType": "pr",
       "platformAutomerge": true
     },
     {
-      "description": "Auto-merge minor updates for well-behaved ecosystems (Maven plugins, dev-only npm).",
-      "matchUpdateTypes": ["minor"],
-      "matchDepTypes": ["build", "dev", "plugin"],
+      "description": "Auto-merge minor updates for well-behaved ecosystems (Maven plugins, dev/build deps). Major bumps still need review.",
+      "matchUpdateTypes": [
+        "minor"
+      ],
+      "matchDepTypes": [
+        "build",
+        "dev",
+        "plugin"
+      ],
       "automerge": true,
       "platformAutomerge": true
+    },
+    {
+      "description": "Docker base images — pin by digest for reproducibility, but still upgrade.",
+      "matchDatasources": [
+        "docker"
+      ],
+      "pinDigests": true
+    },
+    {
+      "description": "Never auto-merge SNAPSHOT dependencies (Maven snapshots, npm prerelease tags).",
+      "matchCurrentVersion": "/SNAPSHOT$/",
+      "enabled": false,
+      "matchPackageNames": [
+        "/.*/"
+      ]
     },
     {
       "description": "Group all Spring Boot artifacts — they must upgrade together.",
       "groupName": "Spring Boot",
       "separateMinorPatch": true,
-      "matchPackageNames": ["/^org\\.springframework\\.boot:/"]
+      "matchPackageNames": [
+        "/^org\\.springframework\\.boot:/"
+      ]
     },
     {
       "description": "Group all Micrometer / OTel artifacts — transitive compatibility.",
@@ -58,7 +88,9 @@
     {
       "description": "Group Testcontainers modules.",
       "groupName": "Testcontainers",
-      "matchPackageNames": ["/^org\\.testcontainers:/"]
+      "matchPackageNames": [
+        "/^org\\.testcontainers:/"
+      ]
     },
     {
       "description": "Group Argo CD + Argo Rollouts charts / images — must upgrade together or controller versions drift from the CRDs they install.",
@@ -101,48 +133,48 @@
     {
       "description": "Group Kyverno chart + image so a policy engine bump lands atomically.",
       "groupName": "Kyverno",
-      "matchPackageNames": ["/kyverno/kyverno/", "/kyverno/"]
+      "matchPackageNames": [
+        "/kyverno/kyverno/",
+        "/kyverno/"
+      ]
     },
     {
       "description": "Group cert-manager chart + image — CRDs + controller must version-match.",
       "groupName": "cert-manager",
-      "matchPackageNames": ["/cert-manager/cert-manager/", "/jetstack/cert-manager/"]
+      "matchPackageNames": [
+        "/cert-manager/cert-manager/",
+        "/jetstack/cert-manager/"
+      ]
     },
     {
       "description": "Group all Maven plugin versions (properties ending .plugin.version) so a weekly sweep doesn't flood the MR board.",
-      "matchFileNames": ["pom.xml"],
-      "matchDepTypes": ["build"],
+      "matchFileNames": [
+        "pom.xml"
+      ],
+      "matchDepTypes": [
+        "build"
+      ],
       "groupName": "Maven plugins"
-    },
-    {
-      "description": "Keep Java LTS — Java 25 is non-LTS; 21 is LTS. Alert on major bumps.",
-      "matchPackageNames": ["java"],
-      "matchUpdateTypes": ["major"],
-      "labels": ["major-upgrade", "manual-review"],
-      "automerge": false
-    },
-    {
-      "description": "Docker base images — pin by digest for reproducibility, but still upgrade.",
-      "matchDatasources": ["docker"],
-      "pinDigests": true
-    },
-    {
-      "description": "Never auto-merge SNAPSHOT dependencies.",
-      "matchCurrentVersion": "/SNAPSHOT$/",
-      "enabled": false,
-      "matchPackageNames": ["/.*/"]
     }
   ],
-  "gitlabci": {
-    "description": "Keep .gitlab-ci.yml image tags current (e.g. maven:X-eclipse-temurin-25-noble)."
-  },
   "vulnerabilityAlerts": {
-    "labels": ["security", "priority-high"],
+    "labels": [
+      "security",
+      "priority-high"
+    ],
     "automerge": false,
-    "schedule": ["at any time"]
+    "schedule": [
+      "at any time"
+    ]
   },
   "lockFileMaintenance": {
+    "description": "Refresh lockfiles weekly to pull in transitive dep patches.",
     "enabled": true,
-    "schedule": ["before 5am on monday"]
+    "schedule": [
+      "before 5am on monday"
+    ]
+  },
+  "gitlabci": {
+    "description": "Keep .gitlab-ci.yml image tags current (e.g. maven:X-eclipse-temurin-25-noble)."
   }
 }
