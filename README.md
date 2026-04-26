@@ -36,30 +36,36 @@ into `mirador-service-java` and `mirador-service-python` under `infra/shared/`.
   Docker pinDigests, codeowners assignee) ; repo-specific groups (Spring Boot,
   FastAPI, Angular) preserved by `bin/ship/renovate-sync.sh`.
 
-## What lives here
+## What lives here (backend infrastructure only)
+
+Since 2026-04-26 the mirador1 family uses **two shared submodules** :
+- **this repo** = backend infrastructure (clusters, terraform, K8s, OTel, dev stack) — consumed by **java + python** only
+- [`mirador-common`](https://gitlab.com/mirador1/mirador-common) = universal cross-repo conventions (release scripts, ADR tooling, Conventional Commits, Renovate base) — consumed by **all 4 repos** (java + python + ui + this repo via `infra/common/`)
 
 | Path | Purpose | Consumer |
 |---|---|---|
 | `compose/dev-stack.yml` | Postgres + Redis + Kafka + LGTM + Ollama | java + python `bin/demo-up.sh` |
 | `bin/budget/` | GCP + OVH budget alert scripts | java + python (cron via launchd) |
 | `bin/cluster/ovh/` | OVH managed-k8s cluster up/down/init scripts | java + python on-demand |
-| `bin/dev/` | Healthchecks + chaos burn-SLO-budget script | local dev + cron |
-| `bin/ship/` | Release automation + default-branch + renovate-sync | manual / CI |
+| `bin/dev/` | Healthchecks + chaos burn-SLO-budget + multi-section stability checker | local dev + cron |
 | `bin/launchd/` | macOS launchd plists (budget cron, runner healthcheck) | local dev workstations |
-| `ci-templates/` | GitLab CI YAML templates (`include:` from consumers) | all 3 service repos |
+| `ci-templates/docker-multiarch.yml` | Multi-arch Docker buildx template (java only ; UI doesn't build multi-arch) | java |
+| `infra/common/` | Submodule pointing to [mirador-common](https://gitlab.com/mirador1/mirador-common) | self-reference for release scripts + ADR drift |
 | `infra/observability/grafana/dashboards-lgtm/` | Cross-cutting Grafana dashboards (SLO Overview spans both services + demo + service-control + logs) | LGTM provisioning |
 | `infra/observability/` | OTel Collector + Prometheus shared config | java + python |
 | `deploy/kubernetes/` | Cross-cutting K8s manifests (Argo CD apps, ESO, Argo Rollouts, network policies, observability stack) | clusters |
 | `deploy/kubernetes/observability-prom/mirador-alerts.yaml` | Cross-cutting alert rules (backend down, kafka lag, etc.) | kube-prometheus-stack operator |
 | `deploy/terraform/{gcp,ovh}/` | Cluster lifecycle | manual / CI |
-| `docs/adr/` | 9 cross-cutting ADRs (decisions ≥ 2 repos) | reference |
+| `docs/adr/` | 7 backend cross-cutting ADRs (observability, SLO, ESO, multi-cloud terraform) | reference |
 | `docs/slo/review-cadence.md` | Monthly + quarterly + post-incident SLO review framework | SRE team |
-| `renovate-base.json` | Common Renovate config | synced into 4 repos via `bin/ship/renovate-sync.sh` |
+| `docs/runbooks/`, `operations/`, `architecture/`, `demo/` | Backend operations docs | reference |
+
+**Universal scripts moved out 2026-04-26** : `bin/ship/{pre-sync,changelog,gitlab-release,renovate-sync,check-default-branch}.sh`, `bin/dev/regen-adr-index.sh`, `ci-templates/conventional-commits.yml`, `renovate-base.json`, and ADRs 0001 + 0055 + 0057 + 0059 — all now in [mirador-common](https://gitlab.com/mirador1/mirador-common). Call them via `infra/common/bin/...` (here) or `infra/common/bin/...` (in any consumer).
 
 ## Why a separate repo (and not merged into one of the others)
 
-Per cross-cutting [ADR-0001](docs/adr/0001-shared-repo-via-submodule.md) :
-shared content is genuinely 80%+ identical between Java + Python — extracting
+Per cross-cutting [ADR-0001 (in mirador-common)](https://gitlab.com/mirador1/mirador-common/-/blob/main/docs/adr/0001-shared-repo-via-submodule.md) :
+shared backend content is genuinely 80%+ identical between Java + Python — extracting
 removes drift risk + lets us bump postgres/kafka/redis versions in one place.
 Submodule (vs polyrepo include or copy-paste) chosen because it pins a
 specific SHA in each consumer (no breakage cascade) AND keeps the consumer

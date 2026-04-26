@@ -1,12 +1,14 @@
-# Cross-cutting ADRs — `mirador-service-shared`
+# Backend cross-cutting ADRs — `mirador-service-shared`
 
-This directory captures the **why** of every architectural choice that
-binds **two or more** of the mirador1 repos
-([java](https://gitlab.com/mirador1/mirador-service-java) ·
-[python](https://gitlab.com/mirador1/mirador-service-python) ·
-[ui](https://gitlab.com/mirador1/mirador-ui) · this `shared` repo).
-Format follows
+This directory captures the **why** of architectural choices that bind
+the **backend** repos (java + python) — observability stack, K8s posture,
+multi-cloud terraform, secret management, SLO/SLA tooling. Format follows
 [Michael Nygard's lightweight ADR template](https://cognitect.com/blog/2011/11/15/documenting-architecture-decisions).
+
+**Universal cross-repo ADRs** (decisions that bind ALL 4 repos including UI :
+submodule pattern, polyrepo vs monorepo, release engineering, Renovate base)
+moved to [`mirador-common/docs/adr/`](https://gitlab.com/mirador1/mirador-common/-/tree/main/docs/adr) on 2026-04-26.
+That is : ADRs 0001, 0055, 0057, 0059 are now there, not here.
 
 For **repo-local decisions** (Spring Boot stack choice, FastAPI auth
 scheme, Angular zoneless mode), see each consumer repo's own
@@ -25,16 +27,16 @@ scheme, Angular zoneless mode), see each consumer repo's own
 - 🚧 **Experimental** : in-progress trial ; may flip to Accepted or
   Superseded based on outcome.
 
-## Hierarchical index
+## Hierarchical index (backend only)
 
 | Theme | ADRs |
 |---|---|
-| **Polyrepo & sharing** | 0001 shared repo via submodule, 0057 polyrepo vs monorepo |
 | **Observability** | 0010 OTLP push to collector, 0039 two observability deployment modes, 0054 GitLab observability dual-export, 0058 SLO/SLA via Sloth |
 | **Security & secrets** | 0016 External Secrets Operator |
 | **Cost discipline** | 0021 cost-deferred industrial patterns |
 | **Multi-cloud** | 0036 multi-cloud Terraform posture |
-| **Release engineering** | 0055 shell-based release automation, 0059 Renovate base preset |
+
+**Moved to common** : 0001 (submodule pattern), 0055 (shell-based release), 0057 (polyrepo vs monorepo), 0059 (Renovate base preset). See [`mirador-common/docs/adr/`](https://gitlab.com/mirador1/mirador-common/-/tree/main/docs/adr).
 
 ## Flat index
 
@@ -47,17 +49,13 @@ catches drift on their bundled copy).
 <!-- ADR-INDEX:START -->
 | ID | Status | Title |
 |---|---|---|
-| 0001 | Accepted | [Shared infra extraction via git submodule](0001-shared-repo-via-submodule.md) |
 | 0010 | Accepted | [OpenTelemetry OTLP push to a Collector (not Prometheus scrape)](0010-otlp-push-to-collector.md) |
 | 0016 | Accepted | [External Secrets Operator + Google Secret Manager](0016-external-secrets-operator.md) |
 | 0021 | Accepted | [Cost-deferred industrial patterns](0021-cost-deferred-industrial-patterns.md) |
 | 0036 | Accepted | [Multi-cloud Terraform posture](0036-multi-cloud-terraform-posture.md) |
 | 0039 | Accepted | [Two observability deployment modes (OTel-native vs Prometheus-community)](0039-two-observability-deployment-modes.md) |
 | 0054 | Active | [Dual-export OTLP telemetry to GitLab Observability](0054-gitlab-observability-dual-export.md) |
-| 0055 | Accepted | [Shell-based release automation (no semantic-release)](0055-shell-based-release-automation.md) |
-| 0057 | Accepted | [Conserver le polyrepo (svc + UI séparés), pas de migration vers monorepo](0057-polyrepo-vs-monorepo.md) |
 | 0058 | Accepted | [SLO/SLA defined as code via Sloth](0058-slo-sla-with-sloth.md) |
-| 0059 | Accepted | [Renovate base preset + sync script (option B)](0059-renovate-base-preset.md) |
 <!-- ADR-INDEX:END -->
 
 ## Adding a new cross-cutting ADR

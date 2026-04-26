@@ -1,9 +1,14 @@
-# `bin/` — Operational scripts inventory
+# `bin/` — Operational scripts inventory (backend infra)
 
-Cross-cutting scripts for the [mirador1](https://gitlab.com/mirador1)
+Backend-infrastructure scripts for the [mirador1](https://gitlab.com/mirador1)
 project family. Submoduled into `mirador-service-java` and
 `mirador-service-python` under `infra/shared/bin/`. Run from the consuming
 repo's path : `infra/shared/bin/<group>/<script>.sh`.
+
+**Universal scripts** (release engineering, ADR drift, Renovate sync) live
+in [`mirador-common`](https://gitlab.com/mirador1/mirador-common) — see
+`infra/common/bin/...` for those. The split (2026-04-26) lets UI consume
+only the universal layer without pulling backend infra it doesn't need.
 
 ## `budget/` — Cost control
 
@@ -35,10 +40,9 @@ Day-to-day developer aid. All scripts have `--help` / dry-run modes.
 
 | Script | Purpose | Wired to |
 |---|---|---|
-| [`stability-check.sh`](dev/stability-check.sh) | Multi-section preflight before tagging stable-vX.Y.Z (lint + test + build + sec-scan). | Manual / cron |
+| [`stability-check.sh`](dev/stability-check.sh) | Multi-section backend stability checker (sonar + CVE + bundle-size + ADR-drift across svc+UI). Used by maintainer before stable-vX.Y.Z tags. Java-side equivalent of Python's per-repo stability-check. | Manual / cron |
 | [`runner-healthcheck.sh`](dev/runner-healthcheck.sh) | Verify Docker `gitlab-runner` container is up + group runner is online from GitLab. Auto-restart on failure. | launchd every 5 min |
 | [`burn-slo-budget.sh`](dev/burn-slo-budget.sh) | Controlled SLO budget burn for live demo (chaos requests + Grafana annotations). | Manual / demo |
-| [`regen-adr-index.sh`](dev/regen-adr-index.sh) | Regenerate `docs/adr/README.md` flat-index table from ADR files. Universal (used by all 4 repos via the submodule). `--check` mode for CI drift detection. | Manual + per-repo `stability-check.sh` |
 
 ## `launchd/` — macOS launchd plists
 
@@ -49,19 +53,12 @@ Cron-equivalent on macOS. Install with `launchctl load -w ~/Library/LaunchAgents
 | [`com.mirador.ovh-budget.plist`](launchd/com.mirador.ovh-budget.plist) | `bin/budget/ovh-alert.sh` | Daily 09:00 |
 | [`com.mirador.runner-healthcheck.plist`](launchd/com.mirador.runner-healthcheck.plist) | `bin/dev/runner-healthcheck.sh` | Every 5 min |
 
-## `ship/` — Release engineering
+## `ship/` — moved to `mirador-common` (2026-04-26)
 
-Release + governance automation. **All 4 scripts are language-agnostic** — Java
-+ Python + UI consumers call them via `infra/shared/bin/ship/...` rather than
-duplicating per-repo (see [factoring rationale](../docs/adr/0001-shared-repo-via-submodule.md)).
-
-| Script | Purpose | Wired to |
-|---|---|---|
-| [`pre-sync.sh`](ship/pre-sync.sh) | Git-safety pre-flight before `git reset --hard` : checks uncommitted, untracked, unpushed commits, stash entries. Returns exit 0 if safe to reset. Universal (operates on caller's git state, not shared's). | Manual before any destructive sync |
-| [`changelog.sh`](ship/changelog.sh) | Generate CHANGELOG.md entry from commits since last `<tag-prefix>*` tag (Conventional Commits). Universal — pass `--tag-prefix stable-py-v` for Python, default is `stable-v`. | Manual pre-tag |
-| [`gitlab-release.sh`](ship/gitlab-release.sh) | Create GitLab Release object linked to a tag, with rendered changelog body. | Manual post-tag |
-| [`check-default-branch.sh`](ship/check-default-branch.sh) | Verifies all 4 mirador1 projects have `default_branch=main` (after the 2026-04-25 incident). | Manual / pre-tag |
-| [`renovate-sync.sh`](ship/renovate-sync.sh) | Sync `renovate.json` across 4 repos from `renovate-base.json` (per [ADR-0059](../docs/adr/0059-renovate-base-preset.md)). | Manual after editing renovate-base.json |
+All release-engineering scripts (`pre-sync`, `changelog`, `gitlab-release`,
+`check-default-branch`, `renovate-sync`) + ADR regen tool moved into
+the universal [`mirador-common`](https://gitlab.com/mirador1/mirador-common) submodule.
+Call them from this repo via `infra/common/bin/ship/...` and `infra/common/bin/dev/regen-adr-index.sh`.
 
 ## Conventions
 
