@@ -137,6 +137,20 @@ spec:
               mountPath: /tmp
             - name: logs
               mountPath: /var/log/app
+            # Customer Churn ONNX model — promoted from MLflow's
+            # Production stage to a ConfigMap by
+            # bin/ml/promote_to_configmap.sh (Phase F of shared
+            # ADR-0061). Mounted read-only under /etc/models so the
+            # backend's ChurnPredictor (Java + Python) loads it at
+            # boot. Missing volume = graceful degradation : the
+            # backend boots, REST + MCP churn endpoints return 503
+            # until the ConfigMap exists. Updating the ConfigMap
+            # does NOT auto-roll the pods ; the promotion script
+            # triggers `kubectl rollout restart` explicitly so the
+            # new model loads in a controlled rolling fashion.
+            - name: churn-model
+              mountPath: /etc/models
+              readOnly: true
           envFrom:
             - configMapRef:
                 name: mirador-config
@@ -207,3 +221,16 @@ spec:
         - name: logs
           emptyDir:
             sizeLimit: 256Mi
+        # Backed by a ConfigMap that bin/ml/promote_to_configmap.sh
+        # creates from MLflow's "Production"-tagged ONNX artefact.
+        # `optional: true` lets the pod boot even when the ConfigMap
+        # hasn't been provisioned yet — the ChurnPredictor handles
+        # the missing-file path with a 503 response on the
+        # prediction endpoints.
+        - name: churn-model
+          configMap:
+            name: mirador-churn-model
+            optional: true
+            items:
+              - key: churn_predictor.onnx
+                path: churn_predictor.onnx
