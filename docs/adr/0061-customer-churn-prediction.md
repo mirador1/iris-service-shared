@@ -237,9 +237,74 @@ Files added to `mirador-service-python` :
 Phase A produces : trained model + MLflow registry entry +
 `.onnx` artefact in MLflow's artifact store.
 
+## Phase B — Java in-process inference (shipped 2026-04-27)
+
+The `mirador-service-java` backend now consumes the ONNX artefact
+produced by Phase A and serves predictions in-process via
+ONNX Runtime — no sidecar, no network hop. Same lifecycle as
+ADR-0060.
+
+Files added to `mirador-service-java` :
+
+- `src/main/java/com/mirador/ml/RiskBand.java` — enum
+  LOW/MEDIUM/HIGH with `classify(probability)` (thresholds 0.3 /
+  0.7, configurable per `mirador.churn.risk-thresholds`).
+- `src/main/java/com/mirador/ml/ChurnPredictionDto.java` —
+  Jackson-serialised record (`customerId`, `probability`,
+  `riskBand`, `topFeatures`, `modelVersion`, `predictedAt`).
+- `src/main/java/com/mirador/ml/ChurnFeatureExtractor.java` —
+  the same 8 features as Python's `feature_engineering.py` (see
+  feature parity tests below).
+- `src/main/java/com/mirador/ml/ChurnPredictor.java` —
+  Spring `@Service` with `@PostConstruct loadModel()` from
+  `mirador.churn.model-path` (default
+  `/etc/models/churn_predictor.onnx` per ADR-0062). Sigmoid
+  applied in code (model exports logits per ADR-0060 §"ONNX
+  contract"). `isReady()` enables graceful degradation when the
+  ConfigMap is missing.
+- `src/main/java/com/mirador/ml/ChurnController.java` —
+  `POST /customers/{id}/churn-prediction` with JWT or API-key
+  auth (mirrors the rest of Mirador's REST surface). 404 if
+  customer missing, 503 if model not loaded.
+- `src/main/java/com/mirador/ml/ChurnMcpToolService.java` —
+  `@Tool predict_customer_churn(customer_id)` for LLM callers.
+  Soft-error DTOs (`NotFoundDto`, `ServiceUnavailableDto`)
+  instead of HTTP exceptions — the LLM can reason about retry /
+  fallback rather than parsing a stack trace.
+- `pom.xml` — `com.microsoft.onnxruntime:onnxruntime:1.21.0`
+  added as a runtime dependency.
+- `docs/ml/churn-prediction.md` — feature documentation
+  (REST + MCP usage + ONNX cross-language guarantee + model
+  provisioning).
+
+The MCP tool catalogue grows from 14 → 15 ;
+`com.mirador.mcp.McpConfig` registers the new
+`ChurnMcpToolService` and `McpServerITest` asserts the new tool
+name appears in the registry.
+
+**Tests added** (19 new unit tests, 100% pass rate locally) :
+
+- `ChurnFeatureExtractorTest` — 6 tests on feature engineering
+  parity (the load-bearing test ; if these drift from Python's
+  `tests/ml/test_features.py`, the cross-language smoke test
+  shipped in Phase G will fail).
+- `ChurnPredictorTest` — 5 tests on graceful degradation
+  (model missing, wrong feature shape, version exposure).
+- `ChurnMcpToolServiceTest` — 3 tests on MCP soft-error DTOs.
+- `RiskBandTest` — 5 tests on boundary classification + custom
+  threshold rejection.
+
+Phase B does NOT yet load a real `.onnx` artefact in CI — that
+happens in Phase F (ConfigMap promotion). Today, the Java
+service boots without the model, returns 503 on the prediction
+endpoint, and continues to serve all other Mirador endpoints
+unchanged. This is the deliberate "deploy-the-jar-before-the-
+model-is-ready" pattern from ADR-0062.
+
 ## References
 
 - [shared ADR-0059 — Customer / Order / Product / OrderLine data model](0059-customer-order-product-data-model.md)
 - [shared ADR-0060 — ONNX cross-language inference](0060-onnx-cross-language-ml-inference.md)
 - [shared ADR-0062 — MLflow registry + ConfigMap promotion](0062-mlflow-registry-configmap-promotion.md)
 - 2026-04-27 session — `support_tickets_count` → `customer_lifetime_days` substitution + Faker for synthetic labels with disclosure.
+- 2026-04-27 session — Phase B Java inference shipped (this section above).
