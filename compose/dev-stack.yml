@@ -89,6 +89,43 @@ services:
       timeout: 5s
       retries: 12
 
+  mlflow:
+    # MLflow tracking server — Customer Churn Phase E (shared ADR-0061).
+    # Stores experiment runs + the model registry. The training pipeline
+    # logs runs here ; bin/ml/promote_to_configmap.sh reads the
+    # "Production"-tagged version from this server's registry.
+    #
+    # File-backend (no separate Postgres) keeps the dev stack lean —
+    # SQLite under /mlflow/mlruns. Production deployments swap to
+    # Postgres + S3 artifact store via env vars (documented in
+    # docs/ml/drift-slo-runbook.md §"Production deployment").
+    #
+    # Opt-in via profile=ml so `docker compose up -d` (default) skips it.
+    # Bring it up with : docker compose --profile ml up -d mlflow
+    profiles: ["ml"]
+    image: ghcr.io/mlflow/mlflow:v2.20.4
+    container_name: mirador-mlflow
+    ports:
+      - "5000:5000"
+    volumes:
+      - mirador-mlflow-data:/mlflow
+    environment:
+      MLFLOW_BACKEND_STORE_URI: sqlite:////mlflow/mlflow.db
+      MLFLOW_DEFAULT_ARTIFACT_ROOT: /mlflow/artifacts
+    command: >
+      mlflow server
+        --host 0.0.0.0
+        --port 5000
+        --backend-store-uri sqlite:////mlflow/mlflow.db
+        --default-artifact-root /mlflow/artifacts
+    healthcheck:
+      # MLflow's /health endpoint is a 200 OK with body "OK". curl missing
+      # in the slim image, so we use python (it ships with mlflow's deps).
+      test: ["CMD-SHELL", "python -c 'import urllib.request; urllib.request.urlopen(\"http://localhost:5000/health\").read()'"]
+      interval: 10s
+      timeout: 5s
+      retries: 12
+
   ollama:
     # Local LLM serving — used by Bio service (mirror Java's BioService).
     # ~4 GB image including llama3.2 model. Opt-in via profile=llm so
@@ -113,3 +150,5 @@ volumes:
     name: mirador-py-pgdata
   mirador-ollama-data:
     name: mirador-ollama-data
+  mirador-mlflow-data:
+    name: mirador-mlflow-data

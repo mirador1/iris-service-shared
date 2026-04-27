@@ -1,0 +1,105 @@
+# =============================================================================
+# Customer Churn drift CronJob — Phase E of shared ADR-0061.
+#
+# Runs bin/ml/compute_drift.py once per day. The script pulls the
+# Production-tagged model's training feature distribution from MLflow,
+# computes the KS-test stat per feature against the last 30 days of
+# customers, pushes the per-feature gauge to the Pushgateway, and logs
+# the run to MLflow under the `churn-drift` experiment.
+#
+# Schedule : 03:00 UTC daily — outside business hours so a long-running
+# job (~5 min on 100 k customers) doesn't compete with user traffic.
+# Random ±5 min jitter via startingDeadlineSeconds avoids the thundering
+# herd against the Pushgateway when multiple clusters share one.
+#
+# Failure handling :
+#   - exit 1 from the script → Job goes Failed → kube-prom-stack's
+#     `KubeJobFailed` alert pages the operator.
+#   - successive failures (concurrencyPolicy=Forbid) prevent dogpiling
+#     when MLflow or the DB is down.
+# =============================================================================
+apiVersion: batch/v1
+kind: CronJob
+metadata:
+  name: mirador-churn-drift
+  namespace: mirador
+  labels:
+    app.kubernetes.io/name: mirador-churn-drift
+    app.kubernetes.io/component: ml
+    app.kubernetes.io/part-of: mirador
+spec:
+  schedule: "0 3 * * *"
+  timeZone: "UTC"
+  concurrencyPolicy: Forbid
+  successfulJobsHistoryLimit: 3
+  failedJobsHistoryLimit: 5
+  startingDeadlineSeconds: 600
+  jobTemplate:
+    spec:
+      backoffLimit: 1
+      ttlSecondsAfterFinished: 86400
+      template:
+        metadata:
+          labels:
+            app.kubernetes.io/name: mirador-churn-drift
+            app.kubernetes.io/component: ml
+        spec:
+          restartPolicy: Never
+          serviceAccountName: mirador-churn-drift
+          securityContext:
+            runAsNonRoot: true
+            runAsUser: 1000
+            seccompProfile:
+              type: RuntimeDefault
+          containers:
+            - name: drift
+              image: registry.gitlab.com/mirador1/mirador-service-python:stable-py-v0.7.0
+              # The Python service image already has all training deps
+              # via the [ml] extra (torch + mlflow + sklearn + scipy + numpy).
+              # Same image saves us a separate build pipeline.
+              imagePullPolicy: IfNotPresent
+              command: ["python3", "/app/infra/shared/bin/ml/compute_drift.py"]
+              args:
+                - "--mlflow-uri=$(MLFLOW_TRACKING_URI)"
+                - "--db-url=$(MIRADOR_DB_URL)"
+                - "--lookback-days=30"
+                - "--ks-threshold=0.20"
+                - "--pushgateway=$(PROMETHEUS_PUSHGATEWAY_URL)"
+              env:
+                - name: MLFLOW_TRACKING_URI
+                  value: "http://mlflow.mlflow.svc.cluster.local:5000"
+                - name: MIRADOR_DB_URL
+                  valueFrom:
+                    secretKeyRef:
+                      name: mirador-secrets
+                      key: DRIFT_DB_URL
+                - name: PROMETHEUS_PUSHGATEWAY_URL
+                  value: "http://prometheus-pushgateway.monitoring.svc.cluster.local:9091"
+              resources:
+                requests:
+                  cpu: 200m
+                  memory: 512Mi
+                limits:
+                  cpu: 1
+                  memory: 1Gi
+              securityContext:
+                allowPrivilegeEscalation: false
+                readOnlyRootFilesystem: true
+                capabilities:
+                  drop: ["ALL"]
+              volumeMounts:
+                - name: tmp
+                  mountPath: /tmp
+          volumes:
+            - name: tmp
+              emptyDir:
+                sizeLimit: 256Mi
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: mirador-churn-drift
+  namespace: mirador
+  labels:
+    app.kubernetes.io/name: mirador-churn-drift
+    app.kubernetes.io/part-of: mirador
