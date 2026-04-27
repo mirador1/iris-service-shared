@@ -301,10 +301,84 @@ endpoint, and continues to serve all other Mirador endpoints
 unchanged. This is the deliberate "deploy-the-jar-before-the-
 model-is-ready" pattern from ADR-0062.
 
+## Phase C — Python in-process inference (shipped 2026-04-27)
+
+The `mirador-service-python` backend now consumes the same ONNX
+artefact as Phase B via the lightweight `onnxruntime` package
+(~30 MB, moved into the runtime `[project.dependencies]` so the
+default container is fully self-contained — the heavy training
+deps stay in the optional `[ml]` extra). Same wire shape as
+Java — the "interchangeable backends" contract from common
+ADR-0008 extends to ML predictions : a UI client cannot tell
+which backend handled the call.
+
+Files added to `mirador-service-python` :
+
+- `src/mirador_service/ml/risk_band.py` — `RiskBand` enum +
+  `classify_risk(probability, low_threshold=0.3, high_threshold=0.7)`.
+  Boundary semantics mirror Java's `RiskBand.java` exactly (`≤`
+  inclusive on the low side, `≤` inclusive on the medium side,
+  `>` exclusive on high).
+- `src/mirador_service/ml/dtos.py` — Pydantic `ChurnPrediction`,
+  `ChurnNotFound`, `ChurnServiceUnavailable`.
+- `src/mirador_service/ml/inference.py` — single-customer
+  `extract_features()` (the lightweight runtime pendant to the
+  pandas-vectorised `feature_engineering.build_features`) +
+  `ChurnPredictor` (ONNX Runtime wrapper with graceful
+  degradation). Robust to mixed-tz datetimes (SQLite returns
+  naive, Postgres returns aware — both normalised to UTC inside
+  the extractor).
+- `src/mirador_service/ml/router.py` —
+  `POST /customers/{id}/churn-prediction` (mirrors Java's
+  `ChurnController` exactly).
+- `src/mirador_service/ml/predictor_singleton.py` — process-wide
+  singleton + `Depends`-compatible provider.
+  `MIRADOR_CHURN_MODEL_PATH` + `MIRADOR_CHURN_MODEL_VERSION` env
+  vars parallel Java's `mirador.churn.model-path` / `.model-version`.
+- `src/mirador_service/mcp/tools.py` — `predict_customer_churn`
+  registered as the 15th MCP tool. Soft-error DTOs match Java's
+  `ChurnMcpToolService` shape exactly.
+- `src/mirador_service/app.py` — eager model load at lifespan
+  startup so the file-system check happens at boot, not on the
+  first request.
+- `pyproject.toml` — `onnxruntime>=1.21,<2` + `numpy>=1.26,<3`
+  in main `[project.dependencies]` ; coverage `omit` rewritten
+  per file (training files keep the omit, runtime files drop it).
+- `docs/ml/churn-prediction.md` — feature documentation
+  mirroring the Java sibling's doc.
+
+**Tests added** (31 new unit tests, 100 % pass rate ; coverage
+gate 90.49 % on the global suite — runtime modules now contribute) :
+
+- `tests/ml/test_risk_band.py` (10) — boundary classification +
+  custom-threshold rejection.
+- `tests/ml/test_dtos.py` (4) — Pydantic shape + Field validation.
+- `tests/ml/test_inference.py` (12) — feature engineering parity
+  with Java's `ChurnFeatureExtractorTest` + graceful-degradation
+  paths + monkey-patched `onnxruntime.InferenceSession` for the
+  inference path (no real ONNX file needed for unit tests — Phase
+  G's cross-language smoke covers the real-model path).
+- `tests/ml/test_router_churn.py` (5) — REST endpoint 200 / 404 /
+  503 paths with `app.dependency_overrides` swapping in a stub
+  predictor.
+
+`tests/unit/mcp/test_dtos.py` + `test_mount.py` updated : tool
+count assertion bumped 14 → 15. The `tests/ml/conftest.py`
+global `pytest.importorskip("torch")` was removed and pushed
+down per file (`test_features.py`, `test_model.py`,
+`test_onnx_export.py` keep their training-only skip ; the new
+runtime tests run unconditionally).
+
+Phase C does NOT yet load a real `.onnx` artefact in CI — that
+happens in Phase F (ConfigMap promotion). Today, the Python
+service boots without the model, returns 503 on the prediction
+endpoint, and continues to serve all other endpoints unchanged.
+
 ## References
 
 - [shared ADR-0059 — Customer / Order / Product / OrderLine data model](0059-customer-order-product-data-model.md)
 - [shared ADR-0060 — ONNX cross-language inference](0060-onnx-cross-language-ml-inference.md)
 - [shared ADR-0062 — MLflow registry + ConfigMap promotion](0062-mlflow-registry-configmap-promotion.md)
 - 2026-04-27 session — `support_tickets_count` → `customer_lifetime_days` substitution + Faker for synthetic labels with disclosure.
-- 2026-04-27 session — Phase B Java inference shipped (this section above).
+- 2026-04-27 session — Phase B Java inference shipped.
+- 2026-04-27 session — Phase C Python inference shipped (this section above).
