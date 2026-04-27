@@ -414,6 +414,69 @@ which the new helpers spec contributes 4 cases. Production build
 clean : new `churn-insights-component` lazy chunk, no bundle
 budget regression.
 
+## Phase E — MLflow tracking + drift SLO + dashboard + runbook (shipped 2026-04-27)
+
+The producer-side observability layer for the trained model.
+Until Phase E, the consumer surface (Java + Python + UI + the
+ConfigMap promotion script) was complete but the model itself
+was unobserved : nothing surfaced when the population shifted
+relative to the training distribution. Phase E closes that gap.
+
+Files added to `mirador-service-shared` :
+
+- `compose/dev-stack.yml` — new `mlflow` service under `profiles:
+  ["ml"]`. SQLite backend + file-store artifacts under
+  `/mlflow/artifacts` so the dev stack stays lean (no separate
+  Postgres instance for the registry). Bring up with
+  `docker compose --profile ml up -d mlflow` ; opt-in to keep
+  the default `up` fast.
+- `bin/ml/compute_drift.py` — daily drift detection script (350
+  LOC). Pulls `training_features.csv` from MLflow's
+  Production-tagged run, builds the current 30-day feature
+  distribution from Postgres, runs a 2-sample Kolmogorov-Smirnov
+  test per feature, pushes per-feature gauges to the Prometheus
+  Pushgateway, logs the run to MLflow under the `churn-drift`
+  experiment. Exits non-zero when any feature exceeds the
+  configurable KS threshold (default 0.20 — the Tabachnick +
+  Fidell "actionable drift" cut-off).
+- `deploy/kubernetes/canary/ml-drift-cronjob.yaml` — daily
+  CronJob (03:00 UTC, `concurrencyPolicy: Forbid`,
+  `backoffLimit: 1`) that runs `compute_drift.py` against the
+  cluster's MLflow service. Uses the same
+  `mirador-service-python` image as the runtime (the `[ml]` extra
+  ships scipy + pandas + mlflow).
+- `deploy/kubernetes/observability-prom/mirador-drift-alerts.yaml`
+  — PrometheusRule with 3 recording-rule blocks (max + p95 KS-stat,
+  freshness) + Sloth-style SLO recording rules (1m / 5m / 1h / 6h
+  / 1d / 3d windows) + 5 alerts (4 burn-rate per ADR-0058
+  pattern + 1 freshness alert at 36 h gap). Wired into the
+  observability-prom kustomization so kube-prom-stack picks it
+  up automatically.
+- `infra/observability/grafana/dashboards-lgtm/mirador-churn-drift.json`
+  — Grafana dashboard with 5 panels : drift today (stat), 30-day
+  budget remaining (gauge), drift series freshness (stat),
+  per-feature drift over time (timeseries with the 0.20
+  threshold band), burn-rate multi-window (timeseries on log
+  scale). Auto-loaded by the LGTM container via the existing
+  dashboards-lgtm provisioning.
+- `docs/ml/drift-slo-runbook.md` — operator runbook : alert
+  table, mermaid triage flowchart, rollback vs re-train decision
+  tree, common failure modes, dev vs production deployment
+  matrix, SLO review schedule integration.
+
+The drift SLO joins the existing 3 SLOs (availability, latency
+p99, enrichment success per ADR-0058) — same multi-window
+multi-burn-rate alerting pattern, same monthly review cadence.
+
+**This completes the 6-phase rollout** : Phase A (training) →
+Phase B (Java inference) → Phase C (Python inference) → Phase D
+(UI) → Phase F (ConfigMap promotion) → Phase E (drift
+observability). The ML capability is now producer-observable
+end-to-end : training tracked in MLflow, predictions served in
+both backends, surfaced in the UI, promoted via a script with
+provenance annotations, drift alerted on with multi-window
+burn-rate.
+
 ## Phase F — bin/ml/promote_to_configmap.sh + K8s mount (shipped 2026-04-27)
 
 The final piece of operational plumbing : the script that takes
