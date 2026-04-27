@@ -15,3 +15,6 @@ Thumbs.db
 *.pem
 *.key
 service-account-*.json
+
+# Local Claude Code worktrees + agent state — never committed.
+.claude/
