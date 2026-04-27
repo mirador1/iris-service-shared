@@ -1,0 +1,245 @@
+# 0061. Customer Churn Prediction — features, label, training pipeline
+
+Date: 2026-04-27
+Status: Accepted
+
+## Context
+
+Mirador's IA axis (per shared ADR-0062 thematic mastery taxonomy
+in mirador-common) covers LLM **inference** (Spring AI + Ollama
+for customer-bio enrichment) but no **trained model**. Adding a
+trained predictor demonstrates a full ML lifecycle end-to-end :
+feature engineering, supervised training, evaluation, ONNX
+export, registry, deployment, drift monitoring.
+
+**Customer Churn Prediction** is the chosen use case :
+- Maps directly to the existing schema (`Customer`, `Order` —
+  see ADR-0059) with no new tables required.
+- Real supervised learning — a binary classification problem with
+  a SQL-derivable label.
+- 8 numeric features, all extractable from current data.
+- Adds a new MCP tool `predict_customer_churn(customer_id)` and
+  REST endpoint `POST /customers/{id}/churn-prediction`.
+- Adds a new UI page `/insights/churn` with 3 widgets (top-10
+  at-risk + search-by-customer + drift on 30 days).
+- Maps cleanly onto the polyrepo "interchangeable backends"
+  contract (same model in Java + Python via ONNX, see ADR-0060).
+
+## Decision
+
+### Label definition (SQL-derivable, reproducible)
+
+```sql
+churned = TRUE  WHEN customer.last_order_at < now() - interval '90 days'
+                AND customer.first_order_at < customer.last_order_at - interval '30 days'
+                AND customer.created_at < now() - interval '120 days'
+                ELSE FALSE
+```
+
+**Rationale per clause** :
+- `last_order_at < now - 90j` — the actual churn signal (no
+  recent purchase).
+- `first_order_at < last_order_at - 30j` — exclude one-shot
+  customers (a single transaction isn't enough signal to call it
+  "churn").
+- `created_at < now - 120j` — exclude customers too recent to
+  have had time to churn (avoid label leakage).
+
+The 3 windows are configurable in `mirador-service-python/
+pyproject.toml` `[tool.churn]` block to allow tuning without
+code change :
+
+```toml
+[tool.churn]
+churn_window_days = 90
+min_active_period_days = 30
+min_account_age_days = 120
+```
+
+### Feature engineering (8 numeric features)
+
+All features derived from `Customer` + `Order` tables only —
+no schema changes needed.
+
+| # | Feature                       | Type   | Source                             |
+|---|-------------------------------|--------|------------------------------------|
+| 1 | `days_since_last_order`       | int    | `now() - max(order.created_at)` per customer |
+| 2 | `total_revenue_30d`           | float  | `sum(order.total_amount) WHERE order.created_at > now-30d` |
+| 3 | `total_revenue_90d`           | float  | same window 90d |
+| 4 | `total_revenue_365d`          | float  | same window 365d |
+| 5 | `order_frequency`             | float  | `count(orders) / customer_lifetime_days` |
+| 6 | `cart_diversity`              | float  | `count(distinct product_id) / count(order_lines)` over all orders |
+| 7 | `email_domain_class`          | int    | enum : 0=corporate-domain, 1=mainstream (gmail/outlook/yahoo), 2=disposable, 3=unknown |
+| 8 | `customer_lifetime_days`      | int    | `now() - customer.created_at` (replaces the originally proposed `support_tickets_count` since Mirador has no `support_ticket` table — flagged in 2026-04-27 session) |
+
+**Why `customer_lifetime_days` over `support_tickets_count`** :
+the original proposal included support-ticket signals, but
+Mirador has no such schema. Adding one would be out of scope for
+a churn-prediction MR. `customer_lifetime_days` is a robust
+proxy : older customers have lower churn probability (survivor
+bias). Documented as a deliberate substitution rather than a
+silent omission.
+
+### Training data — synthetic for v1
+
+Mirador is greenfield with no historical "this customer churned"
+labels. Two options were considered :
+
+1. **(a) Synthetic Faker** — generate 1000 customers + 10K
+   orders with a controlled 20% churn rate via a deterministic
+   seed.
+2. **(b) UCI Telco-Churn dataset** (Kaggle, 7K samples, real
+   labels) — mapped to our schema. More credible but adds a
+   2-day mapping effort + risk of overfitting on a telecom-
+   specific distribution.
+3. **(c) Hybrid** — Faker volume + Telco distribution.
+
+**Decision : (a) Faker** for v1. Documented disclosure in this
+ADR : *"In production, we'd retrain on real labels with the
+business-defined churn definition above"*. The training script
+`bin/ml/train_churn.py` accepts a `--data-source {synthetic,
+postgres}` flag — switching to real Postgres data is one
+command-line argument.
+
+### Model architecture (3-layer MLP, PyTorch)
+
+```python
+class ChurnMLP(nn.Module):
+    def __init__(self, n_features: int = 8) -> None:
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(n_features, 16),
+            nn.ReLU(),
+            nn.Dropout(0.2),
+            nn.Linear(16, 16),
+            nn.ReLU(),
+            nn.Dropout(0.2),
+            nn.Linear(16, 1),  # logits ; apply sigmoid at inference
+        )
+
+    def forward(self, x: torch.Tensor) -> torch.Tensor:
+        return self.net(x)
+```
+
+- **~5K parameters** — training in ~30s on CPU, ~50 KB ONNX export.
+- **Loss** : `nn.BCEWithLogitsLoss` (numerically stable vs
+  Sigmoid + BCE).
+- **Optimizer** : `torch.optim.Adam(lr=1e-3, weight_decay=1e-5)`.
+- **Validation split** : 80/20 stratified on the churn label.
+- **Early stopping** : patience 10 epochs on validation AUC, max
+  100 epochs.
+
+PyTorch chosen over scikit-learn even though the dataset is
+small — the user's 2026-04-27 framing was *"PyTorch me paraît
+plus standard"*. Demonstrating the full PyTorch training loop
+(DataLoader, optimizer, loss.backward, scheduler) is more
+portfolio-relevant than the equivalent
+`from sklearn.linear_model import LogisticRegression`.
+
+### Evaluation metrics + acceptance gate
+
+- **Primary** : ROC AUC on holdout — must beat the baseline
+  (always-predict-majority-class) by **≥ 0.10 absolute** AUC.
+  Baseline AUC = 0.50 ; gate = AUC ≥ 0.60.
+- **Secondary** : precision @ recall = 0.5 ; F1 ; confusion
+  matrix.
+- **Calibration** : reliability diagram + Brier score —
+  predictions should be well-calibrated probabilities, not just
+  rankings.
+
+CI training job fails the run if AUC < 0.60. Logged to MLflow as
+`metrics.auc_holdout`, the registry's transition-to-Production
+also gates on this number.
+
+### ONNX export contract (cross-language stable)
+
+```python
+torch.onnx.export(
+    model,
+    args=(torch.randn(1, 8),),  # 1 sample, 8 features
+    f="churn_predictor.onnx",
+    input_names=["input"],
+    output_names=["logits"],
+    dynamic_axes={"input": {0: "batch_size"}, "logits": {0: "batch_size"}},
+    opset_version=17,
+)
+```
+
+Java + Python inference code reads `inputs["input"]` of shape
+`[batch_size, 8]` and `outputs["logits"]` of shape `[batch_size,
+1]`, applies `sigmoid` in code (NOT in the ONNX graph — keeps
+the export simple and lets us swap calibration without re-export).
+
+## Consequences
+
+### Positive
+- New end-to-end ML capability shipping in 5 phased MRs
+  (training → Java inference → Python inference → UI → drift
+  monitoring).
+- Unifies the IA axis : LLM inference + trained model = full
+  modern ML stack visible.
+- Adds a new SLO axis (model accuracy decay rate, see ADR-0062
+  on the MLflow side).
+- Cross-language smoke test pattern (per ADR-0060) directly
+  applies — the polyrepo's "interchangeable backends" contract
+  extends to ML predictions.
+
+### Negative
+- Synthetic training data limits the credibility — a recruiter
+  may call out *"how would this work with real data?"*. The ADR
+  pre-empts the question by documenting the production migration
+  path (UCI Telco mapping in 1-2 days, OR direct Postgres feed
+  once real history accumulates).
+- The 3-layer MLP is overkill for 8 features — sklearn's
+  `LogisticRegression` would achieve similar AUC with 1/100 the
+  code. Trade-off accepted for portfolio framing : showing the
+  full PyTorch loop is more valuable than achieving the leanest
+  solution.
+- New dependencies (`torch`, `onnx`, `mlflow`) bloat the Python
+  install footprint by ~500 MB. Mitigated via the optional
+  extra `[project.optional-dependencies.ml]` — only installed
+  for training, not for runtime serving.
+
+### Neutral
+- The 8 features are a v1 starting point ; we'd typically iterate
+  with feature importance analysis (SHAP values logged to
+  MLflow) and prune / add. The training script logs all features
+  + their SHAP rankings as MLflow artefacts on every run.
+
+## Phase A scope (this MR)
+
+Phase A ships the **training side only** — Java + Python
+inference are Phase B + C in subsequent MRs.
+
+Files added to `mirador-service-python` :
+
+- `bin/ml/train_churn.py` — main training script (read Postgres
+  OR synthetic seed → features → PyTorch fit → evaluate → ONNX
+  export → MLflow log).
+- `bin/ml/seed_demo_data.py` — Faker generator for synthetic
+  training data (1000 customers + 10K orders, controlled 20 %
+  churn rate, deterministic seed `RANDOM_SEED=42`).
+- `bin/ml/__init__.py`
+- `tests/ml/__init__.py`
+- `tests/ml/test_features.py` — feature-engineering determinism
+  + golden inputs.
+- `tests/ml/test_model.py` — MLP forward pass, output shape,
+  probability bounds, training convergence on a tiny dataset.
+- `tests/ml/test_onnx_export.py` — round-trip equivalence
+  (PyTorch eager vs ONNX runtime on the same inputs ≤ 1e-6
+  difference).
+- `pyproject.toml` — `[project.optional-dependencies.ml]` with
+  `torch>=2.5`, `onnx>=1.17`, `mlflow>=2.16`, `onnxruntime>=1.21`,
+  `Faker>=30`.
+- `[tool.churn]` config block in `pyproject.toml` for the 3
+  window parameters.
+
+Phase A produces : trained model + MLflow registry entry +
+`.onnx` artefact in MLflow's artifact store.
+
+## References
+
+- [shared ADR-0059 — Customer / Order / Product / OrderLine data model](0059-customer-order-product-data-model.md)
+- [shared ADR-0060 — ONNX cross-language inference](0060-onnx-cross-language-ml-inference.md)
+- [shared ADR-0062 — MLflow registry + ConfigMap promotion](0062-mlflow-registry-configmap-promotion.md)
+- 2026-04-27 session — `support_tickets_count` → `customer_lifetime_days` substitution + Faker for synthetic labels with disclosure.
