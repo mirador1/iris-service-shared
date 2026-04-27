@@ -374,6 +374,78 @@ happens in Phase F (ConfigMap promotion). Today, the Python
 service boots without the model, returns 503 on the prediction
 endpoint, and continues to serve all other endpoints unchanged.
 
+## Phase D — UI page /insights/churn (shipped 2026-04-27)
+
+The `mirador-ui` repo ships a new page at `/insights/churn` with
+3 widgets (search-by-id + Top-10 at-risk + drift placeholder)
+that hits `POST /customers/{id}/churn-prediction` on whichever
+backend is currently selected — Java (Phase B) or Python (Phase
+C). The "interchangeable backends" contract from common ADR-0008
+extends to ML predictions ; a UI client cannot tell which backend
+handled the call.
+
+Files added to `mirador-ui` :
+
+- `src/app/features/insights/churn/churn-insights.component.ts`
+  — standalone Angular component with the 3 widgets inline.
+  Risk-band-coloured prediction card (green/orange/red),
+  forkJoin parallel scan for Top-10, SVG layout sketch for the
+  drift panel.
+- `src/app/features/insights/churn/churn-insights-helpers.ts` —
+  pure helpers (riskClass, formatProbability,
+  canSubmitChurnSearch). Angular-free per the established
+  pattern (customers-helpers.ts) so the spec doesn't need
+  TestBed.
+- `src/app/features/insights/churn/churn-insights-helpers.spec.ts`
+  — Vitest tests covering the boundary contract + the 1e-6
+  cross-language probability noise that ADR-0060 permits but
+  the user must not see.
+- `src/app/core/api/api.service.ts` — `ChurnPrediction` +
+  `ChurnRiskBand` types + `predictCustomerChurn(id)` method.
+- `src/app/app.routes.ts` — new `/insights/churn` lazy-loaded
+  route.
+- `src/app/shared/layout/app-shell.component.ts` — new "Insights"
+  sidebar group with the 🤖 icon (room for future ML pages
+  without a nav reshuffle) + "Churn risk" entry in the global
+  search index.
+
+Tests : 374 total pass on `npx ng test` (54 test files), of
+which the new helpers spec contributes 4 cases. Production build
+clean : new `churn-insights-component` lazy chunk, no bundle
+budget regression.
+
+## Phase F — bin/ml/promote_to_configmap.sh + K8s mount (shipped 2026-04-27)
+
+The final piece of operational plumbing : the script that takes
+an MLflow "Production"-tagged ONNX file and lands it as a
+read-only Kubernetes ConfigMap mounted at
+`/etc/models/churn_predictor.onnx` on both backends.
+
+Files added to `mirador-service-shared` :
+
+- `bin/ml/promote_to_configmap.sh` — the promotion script
+  (260 LOC, full pre-flight + AUC gate + dry-run + `--yes`
+  for CI + `--skip-rollout` for staged deploys + `--version`
+  for pinning + provenance annotations on the resulting
+  ConfigMap).
+- `deploy/kubernetes/canary/rollout.yaml` — new `churn-model`
+  volume + mount under `/etc/models` (read-only, `optional:
+  true` so a missing ConfigMap doesn't block pod boot — the
+  graceful-degradation contract from Phase B + C extends to
+  the cluster level).
+- `docs/ml/promote-churn-model.md` — operator runbook covering
+  the standard flow, common questions (rollback, AUC gate
+  failure, GitOps integration), and the failure-modes table.
+
+The script enforces the AUC ≥ 0.60 gate from Phase A in code
+(refuses to promote a regressed model) — making the ADR-0061
+acceptance gate executable rather than aspirational.
+
+Phase F intentionally does NOT include MLflow itself (Phase E
+will deploy it). This phase ships the LAST mile only — the
+producer side (MLflow tracking server + drift SLO + dashboard +
+runbook) is the remaining Phase E scope.
+
 ## References
 
 - [shared ADR-0059 — Customer / Order / Product / OrderLine data model](0059-customer-order-product-data-model.md)
