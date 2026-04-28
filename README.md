@@ -1,4 +1,4 @@
-# mirador-service-shared
+# iris-service-shared
 
 [![BSD-3-Clause](https://img.shields.io/badge/license-BSD--3--Clause-blue)](LICENSE)
 ![Sloth SLO](https://img.shields.io/badge/Sloth-SLO_rules-2D7FF9)
@@ -8,8 +8,12 @@
 ![Kustomize](https://img.shields.io/badge/Kustomize-overlays-326CE5?logo=kubernetes&logoColor=white)
 
 Shared **infrastructure + observability + CI templates + cross-cutting docs**
-for the [mirador1](https://gitlab.com/mirador1) project family. Submoduled
-into `mirador-service-java` and `mirador-service-python` under `infra/shared/`.
+for the [iris7](https://gitlab.com/iris7) project family. Submoduled
+into `iris-service-java` and `iris-service-python` under `infra/shared/`.
+
+Part of **Iris**, an observability-first showcase across 7 facets.
+See [iris-service-java](https://gitlab.com/iris7/iris-service-java)
+for the master narrative + visual.
 
 ## What this proves
 
